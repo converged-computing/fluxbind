@@ -1,0 +1,5 @@
+# Binds ranks to every other core: rank 0->core:0, rank 1->core:2, etc.
+# This tests for memory bandwidth sensitivity.
+default:
+  type: core
+  formula: "$(($local_rank * 2))"

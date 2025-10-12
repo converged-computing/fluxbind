@@ -1,0 +1,9 @@
+# SMT-aware binding. Fills the first PU of all 48 cores, then the second PU.
+#   rank 0 -> core:0.pu:0
+#   rank 1 -> core:1.pu:0
+#   ...
+#   rank 48 -> core:0.pu:1
+# This is hardware-adaptive and a key performance pattern.
+default:
+  type: pu
+  pattern: interleave

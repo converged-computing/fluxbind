@@ -1,0 +1,11 @@
+# A list of rules. The first match wins.
+
+# Rule for the master rank (rank 0).
+- ranks: "0"
+  type: unbound
+
+# Default rule for all other ranks (1-47).
+# Bind them to cores, starting from core 1 to leave core 0 free.
+- default:
+    type: core
+    formula: "$local_rank"
