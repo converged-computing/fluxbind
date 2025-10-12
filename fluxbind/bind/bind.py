@@ -108,6 +108,7 @@ class CommandLineRunner:
             "env",
             "quiet",
             "silent",
+            "nocolor",
         ]:
             setattr(self, name, kwargs.get(name))
 
@@ -186,6 +187,8 @@ class CommandLineRunner:
         """
         if self.quiet:
             cmd += ["--env", "FLUXBIND_QUIET=1"]
+        if self.nocolor:
+            cmd += ["--env", "FLUXBIND_NOCOLOR=1"]
         if self.silent:
             cmd += ["--env", "FLUXBIND_SILENT=1"]
             cmd += ["--env", "FLUXBIND_QUIET=1"]

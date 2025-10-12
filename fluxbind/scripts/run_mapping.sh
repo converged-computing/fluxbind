@@ -2,13 +2,12 @@
 #
 # run_mapping.sh
 
-# --- 1. Argument Check ---
 if [ "$#" -eq 0 ]; then
     echo "Error: No application command provided to run_mapping.sh." >&2
     exit 1
 fi
 
-# --- 2. Get Environment Info (Using your preferred logic) ---
+# Get Environment Info (Using your preferred logic) ---
 rank=${FLUX_TASK_RANK:-0}
 local_rank=${FLUX_TASK_LOCAL_ID:-0}
 node=$(hostname)
@@ -46,13 +45,24 @@ else
     physical_core_list=$(hwloc-calc "${BIND_LOCATION}" --intersect core 2>/dev/null)
 fi
 
-YELLOW='\033[1;33m'
-GREEN='\033[0;32m'
-RESET='\033[0m'
-BLUE='\e[0;34m'
-CYAN='\e[0;36m'
-MAGENTA='\e[0;35m'
-ORANGE='\033[0;33m'
+if [[ "$FLUXBIND_NOCOLOR" != "1" ]]
+  then
+  YELLOW='\033[1;33m'
+  GREEN='\033[0;32m'
+  RESET='\033[0m'
+  BLUE='\e[0;34m'
+  CYAN='\e[0;36m'
+  MAGENTA='\e[0;35m'
+  ORANGE='\033[0;33m'
+else
+  YELLOW=""
+  GREEN=""
+  RESET=""
+  BLUE=""
+  CYAN=""
+  MAGENTA=""
+  ORANGE=""
+fi
 
 if [[ "$FLUXBIND_QUIET" != "1" ]]
   then
