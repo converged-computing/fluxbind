@@ -1,0 +1,10 @@
+# Creates a reverse SMT-aware binding.
+# Fills the first PU of each core, starting from the LAST core (47) backwards.
+#   rank 0 -> core:47.pu:0
+#   rank 1 -> core:46.pu:0
+#   ...
+#   rank 48 -> core:47.pu:1
+default:
+  type: pu
+  pattern: interleave
+  reverse: true

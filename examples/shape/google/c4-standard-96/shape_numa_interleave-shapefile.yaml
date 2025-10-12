@@ -1,0 +1,8 @@
+# Distributes ranks in a "card dealer" fashion across the 2 NUMA nodes.
+#   rank 0 -> numa:0
+#   rank 1 -> numa:1
+#   rank 2 -> numa:0
+#   ...
+default:
+  type: numa
+  formula: "$(($local_rank % 2))"

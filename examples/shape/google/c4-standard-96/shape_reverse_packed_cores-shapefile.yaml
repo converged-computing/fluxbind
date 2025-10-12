@@ -1,0 +1,5 @@
+# Binds rank 0->core:47, rank 1->core:46, etc.
+default:
+  type: core
+  pattern: packed
+  reverse: true

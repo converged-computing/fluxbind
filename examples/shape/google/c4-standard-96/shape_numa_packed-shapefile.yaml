@@ -1,0 +1,5 @@
+# Binds the first 24 ranks entirely within numa:0, then the next 24 within numa:1.
+# This uses integer division based on the 24 cores per NUMA node.
+default:
+  type: numa
+  formula: "$(($local_rank / 24))"

@@ -1,0 +1,12 @@
+# Interleaves ranks across cores on the 2 different NUMA nodes ("zip" pattern).
+#   rank 0 -> numa:0.core:0
+#   rank 1 -> numa:1.core:0  (hwloc maps this to physical core 24)
+#   rank 2 -> numa:0.core:1
+#   rank 3 -> numa:1.core:1  (hwloc maps this to physical core 25)
+default:
+  # NUMA index = rank % 2
+  # Core-on-NUMA index = rank / 2 (integer division)
+  type: "numa:$(($local_rank % 2)).core:$(($local_rank / 2))"
+  
+  # The formula is embedded in the type string.
+  formula: "" 

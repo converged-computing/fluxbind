@@ -1,0 +1,5 @@
+# Binds rank 0->core:0, rank 1->core:1, etc., up to rank 47->core:47.
+# This will fill the 24 cores on NUMA 0 first, then the 24 cores on NUMA 1.
+default:
+  type: core
+  pattern: packed
