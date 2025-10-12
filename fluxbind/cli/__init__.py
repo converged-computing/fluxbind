@@ -112,6 +112,12 @@ def get_parser():
         default=False,
         action="store_true",
     )
+    run.add_argument(
+        "--nocolor",
+        help="suppress color output (e.g., piping to log)",
+        default=False,
+        action="store_true",
+    )
 
     predict = subparsers.add_parser(
         "predict",
