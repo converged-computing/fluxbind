@@ -11,18 +11,10 @@ fi
 # --- 2. Get Environment Info (Using your preferred logic) ---
 rank=${FLUX_TASK_RANK:-0}
 local_rank=${FLUX_TASK_LOCAL_ID:-0}
-nprocs=${FLUX_JOB_SIZE:-1}
-nnodes=${FLUX_JOB_NNODES:-1}
 node=$(hostname)
 
 # Get the logical node id using the arithmetic approach
-if [ "$nnodes" -gt 0 ] && [ "$nprocs" -ge "$nnodes" ]; then
-    # Ensure procs_per_node is at least 1
-    procs_per_node=$(( (nprocs + nnodes - 1) / nnodes )) # Ceiling division for robustness
-    node_id=$(( rank / procs_per_node ))
-else
-    node_id=0
-fi
+node_id=$(flux job taskmap --nodeid=${rank} ${FLUX_JOB_ID})
 
 # The user provides the path to the shape file in the environment.
 if [ -z "$JOB_SHAPE_FILE" ]; then
@@ -62,23 +54,26 @@ CYAN='\e[0;36m'
 MAGENTA='\e[0;35m'
 ORANGE='\033[0;33m'
 
-prefix="${YELLOW}rank ${rank}${RESET}"
-echo -e "${prefix}: Binding Source:         ${MAGENTA}$binding_source${RESET}"
-echo -e "${prefix}: PID for this rank:      ${GREEN}$$ ${RESET}"
-echo -e "${prefix}: Effective Cpuset Mask:  ${CYAN}$cpuset_mask${RESET}"
-echo -e "${prefix}: Logical CPUs (PUs):     ${BLUE}${logical_cpu_list:-none}${RESET}"
-echo -e "${prefix}: Physical Cores:         ${ORANGE}${physical_core_list:-none}${RESET}"
-echo
+if [[ "$FLUXBIND_QUIET" != "1" ]]
+  then
+  prefix="${YELLOW}rank ${rank}${RESET}"
+  echo -e "${prefix}: Binding Source:         ${MAGENTA}$binding_source${RESET}"
+  echo -e "${prefix}: PID for this rank:      ${GREEN}$$ ${RESET}"
+  echo -e "${prefix}: Effective Cpuset Mask:  ${CYAN}$cpuset_mask${RESET}"
+  echo -e "${prefix}: Logical CPUs (PUs):     ${BLUE}${logical_cpu_list:-none}${RESET}"
+  echo -e "${prefix}: Physical Cores:         ${ORANGE}${physical_core_list:-none}${RESET}"
+  echo
+fi
 
 # The 'exec' command replaces this script's process, preserving the env.
 # I learned this developing singularity shell, exec, etc :)
 
 if [[ "${BIND_LOCATION}" == "UNBOUND" ]]; then
     # Execute the command directly without changing affinity.
-    echo -e "${GREEN}fluxbind${RESET}: Rank ${rank} is ${BIND_LOCATION} to execute: $@" >&2
+    if [[ "$FLUXBIND_SILENT" != "1" ]]; then echo -e "${GREEN}fluxbind${RESET}: Rank ${rank} is ${BIND_LOCATION} to execute: $@" >&2; fi
     exec "$@"
 else
     # Use hwloc-bind to set the affinity and then execute the command.
-    echo -e "${GREEN}fluxbind${RESET}: Rank ${rank} is bound to ${BIND_LOCATION} to execute: $@" >&2
+    if [[ "$FLUXBIND_SILENT" != "1" ]]; then  echo -e "${GREEN}fluxbind${RESET}: Rank ${rank} is bound to ${BIND_LOCATION} to execute: $@" >&2; fi
     exec hwloc-bind "${BIND_LOCATION}" -- "$@"
 fi

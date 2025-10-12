@@ -1,0 +1,5 @@
+# Creates an SMT-aware binding (I think for hyper-threading)
+# Binds rank 0->core:0.pu:0, rank 1->core:1.pu:0, ..., rank N->core:0.pu:1, etc. where N is the number of cores.
+default:
+  type: pu
+  pattern: interleave

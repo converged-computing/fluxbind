@@ -2,4 +2,5 @@
 # On this hardware, this is identical to the "core:$local_rank" shape.
 default:
   type: l2cache
-  formula: "$local_rank"
+  pattern: packed
+  reverse: true
