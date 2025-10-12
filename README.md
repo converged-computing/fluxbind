@@ -18,20 +18,27 @@ Use fluxbind to run a job binding to specific cores. For flux, this means we req
 flux start --config ./examples/config/match-first.toml
 
 # 1. Bind each task to a unique physical core, starting from core:0 (common case)
-fluxbind run --shape ./examples/shape/1node/shape_packed_cores.yaml sleep 1
-# Rank 0: Binds to core:0 (cpuset 0x3).
-# Rank 1: Binds to core:1 (cpuset 0xc). etc
+fluxbind run -n 8 --quiet --shape ./examples/shape/1node/packed-cores-shapefile.yaml sleep 1
 
-# 2. Packed PUs (hyperthreading) bind each task to a unique logical CPU (or hyper-thread).
-fluxbind run --shape ./examples/shape/1node/hyper_threading.yaml sleep 1
+# 2. Reverse it!
+fluxbind run -n 8 --quiet --shape ./examples/shape/1node/packed-cores-reversed-shapefile.yaml sleep 1
 
-# 3. An unbound rank - this tests "unbound" to leave Rank 0 unbound, pack all other ranks onto cores, shifted by one.
+# 3. Packed PUs (hyperthreading), so interleaved.
+fluxbind run --tasks-per-core 2 --quiet --shape ./examples/shape/1node/interleaved-shapefile.yaml sleep 1
+
+# 4. Reverse it again!
+fluxbind run --tasks-per-core 2 --quiet --shape ./examples/shape/1node/interleaved-reversed-shapefile.yaml sleep 1
+
+# 5. An unbound rank - this tests "unbound" to leave Rank 0 unbound, pack all other ranks onto cores, shifted by one.
 fluxbind run -N1 -n 3 --shape ./examples/shape/1node/unbound_rank.yaml sleep 1
 
-# 4. L2 cache affinity. Give each task its own dedicated L2 cache to maximize cache performance.
+# 6. L2 cache affinity. Give each task its own dedicated L2 cache to maximize cache performance.
 # On mymachine, each core has its own private L2 cache.
 # Therefore, binding one task per L2 cache is equivalent to binding one task per core.
-fluxbind run -N1 -n 8 --shape ./examples/shape/1node/cache_affinity.yaml sleep 1
+fluxbind run -N1 -n 8 --quiet --shape ./examples/shape/1node/cache-affinity.yaml sleep 1
+
+# 7. Reverse it
+fluxbind run -N1 -n 8 --quiet --shape ./examples/shape/1node/cache-reversed-affinity.yaml sleep 1
 ```
 
 ### Kripke Examples
@@ -39,19 +46,18 @@ fluxbind run -N1 -n 8 --shape ./examples/shape/1node/cache_affinity.yaml sleep 1
 As we prepare to test with apps, here are some tests I'm thinking of doing.
 
 ```bash
-# baseline - pack each MPI rank onto its own dedicated physical core (8.693519e-09)
+# 1. Baseline - pack each MPI rank onto its own dedicated physical core (8.693519e-09)
 fluxbind run -N 1 -n 8 --shape ./examples/shape/kripke/baseline-shapefile.yaml kripke --procs 2,2,2 --zones 16,16,16 --niter 500
 
-# spread cores (memory bandwidth) If Kripke is limited by memory bandwidth, if we place ranks on every other core, we reduce contention for the shared L3 cache
+# 2. Spread cores (memory bandwidth)
+# If Kripke is limited by memory bandwidth, if we place ranks on every other core, we reduce contention for the shared L3 cache
 # If Kripke memory bound, this layout might be faster than packed even with half cores. If compute based, worse (1.341355e-08)
 fluxbind run -N 1 -n 4 --shape ./examples/shape/kripke/memory-spread-cores-shapefile.yaml kripke --procs 2,2,1 --zones 16,16,16 --niter 500
 
-# problem: we can't override flux and ask for 16 tasks
-# packed pus (each of 8 cores has 2 pu == 16). We are testing if Kripke can benefit from SMT (simultaneous multi-threading)
-# Maybe better for compute-heavy?
-fluxbind run -N 1 -n 16 --shape ./examples/shape/kripke/packed-pus-shapefile.yaml kripke --procs 2,4,2 --zones 16,16,16 --niter 500
+# 3. Packed pus (each of 8 cores has 2 pu == 16). We are testing if Kripke can benefit from SMT (simultaneous multi-threading)
+fluxbind run -N 1 --tasks-per-core 2 --shape ./examples/shape/kripke/packed-pus-shapefile.yaml kripke --procs 2,4,2 --zones 16,16,16 --niter 500
 
-# hybrid model: launch just two MPI ranks and give each one a whole L3 cache domain to work with (1.966967e-08)
+# 4. Hybrid model: launch just two MPI ranks and give each one a whole L3 cache domain to work with (1.966967e-08)
 fluxbind run -N 1 -n 2 --env OMP_NUM_THREADS=4 --env OMP_PLACES=cores --shape ./examples/shape/kripke/hybrid-l3-shapefile.yaml kripke --zones 16,16,16 --niter 500 --procs 2,1,1 --layout GZD
 ```
 

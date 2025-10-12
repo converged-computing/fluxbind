@@ -30,13 +30,6 @@ def get_parser():
     )
 
     parser.add_argument(
-        "--quiet",
-        dest="quiet",
-        help="suppress additional output.",
-        default=False,
-        action="store_true",
-    )
-    parser.add_argument(
         "--version",
         dest="version",
         help="show software version.",
@@ -98,6 +91,26 @@ def get_parser():
         type=int,
         default=None,
         help="The number of CORES (not PUs) to bind per task.",
+    )
+    run.add_argument(
+        "--tasks-per-core",
+        type=int,
+        default=None,
+        help="The number of tasks per core.",
+    )
+    run.add_argument(
+        "--silent",
+        dest="silent",
+        help="no additional output.",
+        default=False,
+        action="store_true",
+    )
+    run.add_argument(
+        "--quiet",
+        dest="quiet",
+        help="suppress additional output (only print fluxbind mapping)",
+        default=False,
+        action="store_true",
     )
 
     predict = subparsers.add_parser(
@@ -167,7 +180,7 @@ def run_fluxbind():
         sys.exit(0)
 
     setup_logger(
-        quiet=args.quiet,
+        quiet=False,
         debug=args.debug,
     )
 

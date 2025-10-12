@@ -89,31 +89,25 @@ def stream(cmd):
 
 
 class CommandLineRunner:
-    def __init__(
-        self,
-        nodes,
-        tasks,
-        exclusive=False,
-        cores_per_task=None,
-        cpu_affinity=None,
-        taskmap=None,
-        command=None,
-        shape=None,
-        env=None,
-        **kwargs,
-    ):
+    def __init__(self, **kwargs):
         """
         Assemble a flux run command from command line flags, etc.
         """
-        self.nodes = nodes
-        self.tasks = tasks
-        self.exclusive = exclusive
-        self.cores_per_task = cores_per_task
-        self.cpu_affinity = cpu_affinity
-        self.taskmap = taskmap
-        self.command = command
-        self.shape = shape
-        self.env = env
+        for name in [
+            "nodes",
+            "tasks",
+            "exclusive",
+            "cores_per_task",
+            "tasks_per_core",
+            "cpu_affinity",
+            "taskmap",
+            "command",
+            "shape",
+            "env",
+            "quiet",
+            "silent",
+        ]:
+            setattr(self, name, kwargs.get(name))
 
     def parse_binding_output(self, raw_output):
         """
@@ -179,8 +173,24 @@ class CommandLineRunner:
             cmd.append("--exclusive")
         if self.cores_per_task is not None:
             cmd += ["--cores-per-task", str(self.cores_per_task)]
+        if self.tasks_per_core is not None:
+            cmd += ["--tasks-per-core", str(self.tasks_per_core)]
         if self.taskmap is not None:
             cmd += [f"--taskmap={self.taskmap}"]
+        cmd = self.set_envars(cmd)
+        return cmd
+
+    def set_envars(self, cmd):
+        """
+        Shared function to set environment variables
+        """
+        if self.quiet:
+            cmd += ["--env", "FLUXBIND_QUIET=1"]
+        if self.silent:
+            cmd += ["--env", "FLUXBIND_SILENT=1"]
+            cmd += ["--env", "FLUXBIND_QUIET=1"]
+        if self.shape is not None:
+            cmd += ["--env", f"JOB_SHAPE_FILE={self.shape}"]
         if self.env is not None:
             for envar in self.env:
                 cmd += ["--env", envar]
@@ -197,11 +207,12 @@ class CommandLineRunner:
             "-N",
             str(self.nodes),
             "--exclusive",
-            "--env",
-            f"JOB_SHAPE_FILE={self.shape}",
         ]
+        cmd = self.set_envars(cmd)
         if self.tasks is not None:
             cmd += ["-n", str(self.tasks)]
+        if self.tasks_per_core is not None:
+            cmd += ["--tasks-per-core", str(self.tasks_per_core)]
         if self.cpu_affinity is not None:
             cmd += ["-o", f"cpu-affinity={self.cpu_affinity}"]
         if self.env is not None:
@@ -215,7 +226,11 @@ class CommandLineRunner:
 
         This is a run from the command line (non jobspec)
         """
-        print(f"\nRunning Experiment with {self.nodes} nodes and {self.tasks} tasks")
+        if self.tasks is not None:
+            print(f"\nRunning Experiment with {self.nodes} nodes and {self.tasks} tasks")
+        else:
+            print(f"\nRunning Experiment with {self.nodes} nodes")
+
         if self.shape is not None:
             cmd = self.get_shape_command()
         else:

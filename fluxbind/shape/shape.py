@@ -10,17 +10,35 @@ class Shape:
     We get the binding string based on a process's rank and node context.
     """
 
-    def __init__(self, filepath):
+    def __init__(self, filepath, machine="machine:0"):
         """
         Loads and parses the YAML shape file upon instantiation.
         """
+        self.machine = machine
         self.data = self.load_file(filepath)
+        # This discovers and cache hardware properties on init
+        # The expectation is that this is running from the node (task)
+        self.num_cores = self.discover_hardware("core")
+        self.num_pus = self.discover_hardware("pu")
+        self.pus_per_core = self.num_pus // self.num_cores if self.num_cores > 0 else 0
 
     def load_file(self, filepath):
         """
         Loads and parses the YAML shape file.
         """
         return utils.read_yaml(filepath)
+
+    def discover_hardware(self, hw_type: str) -> int:
+        """
+        Runs hwloc-calc to get the number of a specific hardware object.
+        """
+        try:
+            command = f"hwloc-calc --number-of {hw_type} {self.machine}"
+            result = subprocess.run(command, shell=True, capture_output=True, text=True, check=True)
+            return int(result.stdout.strip())
+        except (subprocess.CalledProcessError, ValueError) as e:
+            # Better to raise an error than to silently return a default
+            raise RuntimeError(f"Failed to determine number of '{hw_type}': {e}")
 
     @staticmethod
     def parse_range(range_str: str) -> set:
@@ -98,12 +116,49 @@ class Shape:
         if hwloc_type.lower() == "unbound":
             return "UNBOUND"
 
-        formula_template = rule.get("formula")
-        if formula_template is None:
-            raise ValueError(f"Matching rule has no 'formula' defined: {rule}")
+        # Simple pattern names!
+        if "pattern" in rule:
+            pattern = rule.get("pattern", "packed").lower()
+            reverse = rule.get("reverse", False)
 
-        index = self.evaluate_formula(formula_template, local_rank)
-        if index is None:
-            raise ValueError("Formula evaluation failed.")
+            if pattern == "packed":
+                # packed we need to know the total number of the target object type.
+                total_objects = self.discover_hardware(hwloc_type)
+                target_index = local_rank
+                if reverse:
+                    target_index = total_objects - 1 - local_rank
+                return f"{hwloc_type}:{target_index}"
 
-        return f"{hwloc_type}:{index}"
+            elif pattern == "interleave":
+                # I think interleave could work well for SMT-aware binding of PUs.
+                if hwloc_type != "pu":
+                    raise ValueError(
+                        "The 'interleave' pattern requires 'type: pu' for SMT-aware binding."
+                    )
+
+                # These values were discovered and cached in __init__
+                core_index = local_rank % self.num_cores
+                pu_on_core_index = local_rank // self.num_cores
+                if reverse:
+                    core_index = self.num_cores - 1 - core_index
+
+                # Return the hierarchical binding string
+                return f"core:{core_index}.pu:{pu_on_core_index}"
+
+            else:
+                raise ValueError(f"Unknown pattern '{pattern}'. Use 'packed' or 'interleave'.")
+
+        # More complex, custom user formula
+        elif "formula" in rule:
+            formula_template = rule.get("formula")
+            if formula_template is None:
+                raise ValueError(f"Matching rule has no 'formula' defined: {rule}")
+
+            index = self.evaluate_formula(formula_template, local_rank)
+            if index is None:
+                raise ValueError("Formula evaluation failed.")
+
+            return f"{hwloc_type}:{index}"
+
+        else:
+            raise ValueError(f"Rule must contain either a 'pattern' or a 'formula': {rule}")

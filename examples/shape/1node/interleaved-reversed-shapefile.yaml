@@ -1,0 +1,5 @@
+# Interleaved... and reversed!
+default:
+  type: pu
+  pattern: interleave
+  reverse: true

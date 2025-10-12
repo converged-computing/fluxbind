@@ -1,0 +1,5 @@
+# Binds rank 0->core:0, rank 1->core:1, etc.
+# A standard "packed" layout.
+default:
+  type: core
+  pattern: packed
