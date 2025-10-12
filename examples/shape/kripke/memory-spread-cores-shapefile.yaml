@@ -1,0 +1,5 @@
+    
+# The core index is the local rank multiplied by 2.
+default:
+  type: core
+  formula: "$(($local_rank * 2))"

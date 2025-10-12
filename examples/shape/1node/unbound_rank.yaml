@@ -1,0 +1,11 @@
+# This is an example shape file to specify an unbound rank!
+# Rule for rank 0, some master running thing
+- ranks: "0"
+  type: unbound
+
+# For everything else, we fall back to the core
+# This rule applies to all other ranks
+- default:
+    # The core index is (local_rank - 1) to account for rank 0 not taking a core.
+    type: core
+    formula: "$(($local_rank - 1))"

@@ -1,0 +1,4 @@
+# Default rule: the core index is the same as the local rank.
+default:
+  type: core
+  formula: "$local_rank"

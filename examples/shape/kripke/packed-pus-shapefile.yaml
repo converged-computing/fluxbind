@@ -1,0 +1,5 @@
+    
+# The PU index is the same as the local rank.
+default:
+  type: pu
+  formula: "$local_rank"

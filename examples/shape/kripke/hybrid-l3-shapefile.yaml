@@ -1,0 +1,5 @@
+    
+# The L3 cache index is the local rank.
+default:
+  type: l3cache
+  formula: "0"

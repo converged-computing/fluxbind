@@ -1,0 +1,13 @@
+    
+# This file uses specific rules, not a default.
+# The first match wins. This requires TWO numa nodes.
+
+# Ranks 0 through 7 are placed on the first NUMA node.
+- ranks: "0-3"
+  type: numa
+  formula: "0"
+
+# Placed on the second NUMA node.
+- ranks: "4-8"
+  type: numa
+  formula: "1"
