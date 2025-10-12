@@ -54,38 +54,40 @@ def read_yaml_file(filename):
 
 def stream(cmd):
     """
-    Executes a command and streams its stdout and stderr to the console
+    Executes a command and streams its output to the console, preserving the
+    interleaved order of stdout and stderr.
     """
-    captured_stdout = []
-    captured_stderr = []
+    captured_output = []
+
+    # The key change: stderr=subprocess.STDOUT tells the OS to merge the streams.
     process = subprocess.Popen(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8"
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,  # Merge stderr into stdout
+        text=True,
+        encoding="utf-8",
     )
 
-    def reader_thread(pipe, output_list, prefix):
-        try:
-            for line in pipe:
-                line_stripped = line.strip()
-                # I'm printing in the output parser instead
-                # because it's formatted better. You can print here for debugging.
-                # print(line_stripped, flush=True)
-                output_list.append(line_stripped)
-        finally:
-            pipe.close()
+    # Now we only need one reader thread for the single, merged stream.
+    def reader_thread(pipe, output_list):
+        for line in pipe:
+            line_stripped = line.strip()
+            print(line_stripped, flush=True)
+            output_list.append(line_stripped)
+        pipe.close()
 
-    # Last argument is a prefix
-    stdout_thread = threading.Thread(
-        target=reader_thread, args=(process.stdout, captured_stdout, "")
-    )
-    stderr_thread = threading.Thread(
-        target=reader_thread, args=(process.stderr, captured_stderr, "")
-    )
-    stdout_thread.start()
-    stderr_thread.start()
-    stdout_thread.join()
-    stderr_thread.join()
+    # We only have one pipe: process.stdout
+    thread = threading.Thread(target=reader_thread, args=(process.stdout, captured_output))
+    thread.start()
+
+    # Wait for the reader thread to finish (it will when the process closes its pipe)
+    thread.join()
+
+    # Wait for the process to terminate and get its return code
     return_code = process.wait()
-    return return_code, "\n".join(captured_stdout) + "\n".join(captured_stderr)
+
+    # The captured_output list now contains the perfectly ordered, interleaved output
+    return return_code, "\n".join(captured_output)
 
 
 class CommandLineRunner:
@@ -118,8 +120,6 @@ class CommandLineRunner:
         collecting = True
         for line in raw_output.strip().split("\n"):
             parts = line.split()
-            if "PEWPEWPEW" not in line and "PEWSTOP" not in line:
-                print(line)
             if "PEWPEWPEW" not in line:
                 continue
             if "PEWSTOP" in line:
