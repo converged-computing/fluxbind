@@ -59,6 +59,9 @@ def stream(cmd):
     """
     captured_output = []
 
+    # Not affected by system time changes
+    start_time = time.monotonic()
+
     # The key change: stderr=subprocess.STDOUT tells the OS to merge the streams.
     process = subprocess.Popen(
         cmd,
@@ -85,6 +88,10 @@ def stream(cmd):
 
     # Wait for the process to terminate and get its return code
     return_code = process.wait()
+    end_time = time.monotonic()
+    duration = end_time - start_time
+    print(f"fluxtime returncode: {return_code}")
+    print(f"fluxtime duration: {duration} seconds")
 
     # The captured_output list now contains the perfectly ordered, interleaved output
     return return_code, "\n".join(captured_output)
@@ -125,7 +132,6 @@ class CommandLineRunner:
                 continue
             if "PEWSTOP" in line:
                 collecting = False
-                print()
 
             if not collecting:
                 continue
@@ -255,7 +261,6 @@ class CommandLineRunner:
 
         if return_code != 0:
             print("Warning, application did not return with 0 exit code.")
-        print("\nParsing actual bindings from job output...")
         return self.parse_binding_output(raw_output)
 
 
