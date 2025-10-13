@@ -1,0 +1,4 @@
+default:
+  type: core
+  bind: gpu-local
+  prefer: 1
