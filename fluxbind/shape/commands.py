@@ -29,17 +29,63 @@ class Command:
 class HwlocCalcCommand(Command):
     name = "hwloc-calc"
 
-    def execute(self, args_list: list) -> str:
+    def count(self, hw_type: str, within: str = "machine:0") -> int:
         """
-        Executes hwloc-calc with a list of arguments.
-        This is safer as it avoids shell interpretation of the arguments.
-        """
-        if isinstance(args_list, str):
-            args_list = shlex.split(args_list)
+        Returns the total number of a specific hardware object.
 
-        # A more robust validation could be added here if needed,
-        command_list = [self.name] + args_list
-        return self.run(command_list, shell=False)
+        Args:
+            hw_type: The type of object to count (e.g., "core", "numa").
+            within_object: Optional object to restrict the count to (e.g., "numa:0").
+        """
+        try:
+            args = ["--number-of", hw_type, within]
+            result_stdout = self.run([self.name] + args)
+            return int(result_stdout)
+        except (RuntimeError, ValueError) as e:
+            raise RuntimeError(f"Failed to count number of '{hw_type}': {e}")
+
+    def list_cpusets(self, hw_type: str, within: str = "machine:0") -> list[str]:
+        """
+        Returns a list of cpuset strings for each object of a given type.
+
+        Args:
+            hw_type: The type of object to list (e.g., "numa").
+            within_object: Optional object to restrict the list to.
+        """
+        try:
+            # Get the indices of all objects of this type
+            args_intersect = ["--intersect", hw_type, within]
+            indices_str = self.run([self.name] + args_intersect)
+            indices = indices_str.split(",")
+
+            # Cut out early
+            if not indices or not indices[0]:
+                return []
+
+            # For each index, get its specific cpuset
+            return [self.run([self.name, f"{hw_type}:{i}"]) for i in indices]
+        except (RuntimeError, ValueError) as e:
+            raise RuntimeError(f"Failed to list cpusets for '{hw_type}': {e}")
+
+    def get_cpuset(self, location: str) -> str:
+        """
+        Gets the cpuset for a single, specific location string (e.g., "pci=...", "core:0").
+        """
+        return self.run([self.name, location])
+
+    def get_object_in_set(self, cpuset: str, obj_type: str, index: int) -> str:
+        """
+        Gets the Nth object of a type within a given cpuset.
+        e.g., find the 1st 'core' within cpuset '0x00ff'.
+        """
+        # This uses the robust two-step process internally
+        all_objects_str = self.run([self.name, cpuset, "--intersect", obj_type])
+        available_indices = all_objects_str.split(",")
+        try:
+            target_index = available_indices[index]
+            return f"{obj_type}:{target_index}"
+        except IndexError:
+            raise ValueError(f"Cannot find the {index}-th '{obj_type}' in cpuset {cpuset}.")
 
 
 class NvidiaSmiCommand(Command):

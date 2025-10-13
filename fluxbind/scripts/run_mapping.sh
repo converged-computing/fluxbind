@@ -24,6 +24,7 @@ fi
 # Call the fluxbind helper script to get the target location string (e.g., "core:0" or "UNBOUND")
 # It ALWAYS returns a single line in the format: BIND_LOCATION,CUDA_DEVICE_ID
 # For CPU jobs, CUDA_DEVICE_ID will be the string "NONE".
+echo fluxbind shape --file "$JOB_SHAPE_FILE" --rank "$rank" --node-id "$node_id" --local-rank "$local_rank"
 BIND_INFO=$(fluxbind shape --file "$JOB_SHAPE_FILE" --rank "$rank" --node-id "$node_id" --local-rank "$local_rank")
 
 # Exit if the helper script failed

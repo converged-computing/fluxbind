@@ -195,6 +195,8 @@ class CommandLineRunner:
             cmd += ["-o", f"gpu-affinity={self.gpu_affinity}"]
         if self.cores_per_task is not None:
             cmd += ["--cores-per-task", str(self.cores_per_task)]
+        if self.gpus_per_task is not None:
+            cmd += ["--gpus-per-task", str(self.gpus_per_task)]
         if self.tasks_per_core is not None:
             cmd += ["--tasks-per-core", str(self.tasks_per_core)]
         if self.taskmap is not None:
