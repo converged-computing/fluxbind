@@ -1,5 +1,4 @@
-# In file: fluxbind/commands.py
-import re
+import shlex
 import subprocess
 import sys
 
@@ -35,9 +34,12 @@ class HwlocCalcCommand(Command):
         Executes hwloc-calc with a list of arguments.
         This is safer as it avoids shell interpretation of the arguments.
         """
+        if isinstance(args_list, str):
+            args_list = shlex.split(args_list)
+
         # A more robust validation could be added here if needed,
         command_list = [self.name] + args_list
-        return self._run(command_list, shell=False)
+        return self.run(command_list, shell=False)
 
 
 class NvidiaSmiCommand(Command):
@@ -51,7 +53,7 @@ class NvidiaSmiCommand(Command):
         command_str = f"{self.name} --query-gpu=pci.bus_id --format=csv,noheader"
 
         # shell=True is safe here because the entire command is static and defined internally.
-        output = self._run(command_str, shell=True)
+        output = self.run(command_str, shell=True)
 
         # Parse the output into a clean list
         ids = output.strip().split("\n")

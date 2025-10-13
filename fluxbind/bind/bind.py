@@ -108,6 +108,8 @@ class CommandLineRunner:
             "exclusive",
             "cores_per_task",
             "tasks_per_core",
+            "gpus_per_task",
+            "gpu_affinity",
             "cpu_affinity",
             "taskmap",
             "command",
@@ -172,19 +174,31 @@ class CommandLineRunner:
         A custom command uses flux to ask for a specific binding
         """
         cmd = ["flux", "run", "-N", str(self.nodes)]
+        cmd = self.set_envars(cmd)
+        cmd = self.set_flags(cmd)
+
+        # This is the main difference between a shape and not command.
+        # We don't have to ask for exclusive here. For shape, we do.
+        if self.exclusive:
+            cmd.append("--exclusive")
+        return cmd
+
+    def set_flags(self, cmd):
+        """
+        Set command flags.
+        """
         if self.tasks is not None:
             cmd += ["-n", str(self.tasks)]
         if self.cpu_affinity is not None:
             cmd += ["-o", f"cpu-affinity={self.cpu_affinity}"]
-        if self.exclusive:
-            cmd.append("--exclusive")
+        if self.gpu_affinity is not None:
+            cmd += ["-o", f"gpu-affinity={self.gpu_affinity}"]
         if self.cores_per_task is not None:
             cmd += ["--cores-per-task", str(self.cores_per_task)]
         if self.tasks_per_core is not None:
             cmd += ["--tasks-per-core", str(self.tasks_per_core)]
         if self.taskmap is not None:
             cmd += [f"--taskmap={self.taskmap}"]
-        cmd = self.set_envars(cmd)
         return cmd
 
     def set_envars(self, cmd):
@@ -209,6 +223,8 @@ class CommandLineRunner:
         """
         A shape command requires exclusive (for now) and then exports
         (provides) the JOB_SHAPE_FILE to the job.
+
+        TODO combine this into one command.
         """
         cmd = [
             "flux",
@@ -218,16 +234,7 @@ class CommandLineRunner:
             "--exclusive",
         ]
         cmd = self.set_envars(cmd)
-        if self.tasks is not None:
-            cmd += ["-n", str(self.tasks)]
-        if self.tasks_per_core is not None:
-            cmd += ["--tasks-per-core", str(self.tasks_per_core)]
-        if self.cpu_affinity is not None:
-            cmd += ["-o", f"cpu-affinity={self.cpu_affinity}"]
-        if self.env is not None:
-            for envar in self.env:
-                cmd += ["--env", envar]
-        return cmd
+        return self.set_flags(cmd)
 
     def execute(self, script):
         """

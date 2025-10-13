@@ -104,31 +104,60 @@ class Shape:
     def get_gpu_local_binding(self, rule: dict, local_rank: int) -> str:
         """
         Calculates binding for a rank based on its proximity to an assigned GPU.
+        Supports an optional prefer key for user-preferred object selection.
         """
         if not self.gpu_pci_ids:
-            raise RuntimeError("Shape specifies 'on: gpu-local', but no GPUs were discovered.")
+            raise RuntimeError(
+                "Shape specifies 'locality: gpu-local', but no GPUs were discovered."
+            )
 
         num_gpus = len(self.gpu_pci_ids)
         hwloc_type = rule.get("type")
         if not hwloc_type:
-            raise ValueError(
-                "Rule with 'on: gpu-local' must also specify a 'type' (e.g., core, numa)."
-            )
+            raise ValueError("Rule with 'locality: gpu-local' must also specify a 'type'.")
 
+        # 1. Assign a GPU to this rank (round-robin)
         target_gpu_index = local_rank % num_gpus
         cuda_devices = str(target_gpu_index)
         target_gpu_pci_id = self.gpu_pci_ids[target_gpu_index]
-        gpu_locality_cpuset = commands.hwloc_calc.execute([f"pci={target_gpu_pci_id}"])
 
+        # 2. Get the cpuset for the GPU's locality domain
+        gpu_locality_cpuset = commands.hwloc_calc.execute([f"pci={target_gpu_pci_id}"])
+        cpu_binding_string = ""
+
+        # 3. Determine the final CPU binding
         if hwloc_type in ["numa", "package", "l3cache"]:
             cpu_binding_string = gpu_locality_cpuset
+
         elif hwloc_type in ["core", "pu", "l2cache"]:
-            rank_index_in_gpu_group = local_rank // num_gpus
-            cpu_binding_string = commands.HwlocCalcCommand().execute(
-                f'"{gpu_locality_cpuset}" -I {hwloc_type}:{rank_index_in_gpu_group}'
+            all_objects_in_domain_str = commands.hwloc_calc.execute(
+                [gpu_locality_cpuset, "--intersect", hwloc_type]
             )
+            available_indices = all_objects_in_domain_str.split(",")
+            target_object_index = None
+
+            # Is the user asking to prefer a specific identifier?
+            if "prefer" in rule:
+                requested_index = str(rule["prefer"])
+                if requested_index in available_indices:
+                    target_object_index = requested_index
+
+            if target_object_index is None:
+                rank_index_in_gpu_group = local_rank // num_gpus
+                try:
+                    target_object_index = available_indices[rank_index_in_gpu_group]
+                except IndexError:
+                    raise ValueError(
+                        f"Cannot find the {rank_index_in_gpu_group}-th '{hwloc_type}' for local_rank {local_rank} "
+                        f"within the GPU's locality. Only {len(available_indices)} are available."
+                    )
+
+            cpu_binding_string = f"{hwloc_type}:{target_object_index}"
         else:
-            raise ValueError(f"Unsupported type '{hwloc_type}' for 'on: gpu-local' binding.")
+            raise ValueError(f"Unsupported type '{hwloc_type}' for 'locality: gpu-local' binding.")
+
+        if not cpu_binding_string:
+            raise RuntimeError("Failed to calculate a valid cpu_binding_string.")
 
         return f"{cpu_binding_string},{cuda_devices}"
 
@@ -155,7 +184,7 @@ class Shape:
             raise ValueError(f"Matching rule has no 'type' defined: {rule}")
 
         # Are we doing something with GPU?
-        if rule.get("on") == "gpu-local":
+        if rule.get("bind") == "gpu-local":
             return self.get_gpu_local_binding(rule, local_rank)
         cpu_binding_string = self.get_cpu_binding(hwloc_type, rule, local_rank)
 

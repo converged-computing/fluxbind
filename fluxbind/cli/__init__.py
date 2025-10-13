@@ -30,6 +30,13 @@ def get_parser():
     )
 
     parser.add_argument(
+        "--quiet",
+        dest="quiet",
+        help="suppress additional output.",
+        default=False,
+        action="store_true",
+    )
+    parser.add_argument(
         "--version",
         dest="version",
         help="show software version.",
@@ -64,7 +71,11 @@ def get_parser():
         "--cpu-affinity",
         default=None,
         help="Add cpu-affinity",
-        # choices=["none", "per-task"],
+    )
+    run.add_argument(
+        "--gpu-affinity",
+        default=None,
+        help="Add gpu-affinity",
     )
     run.add_argument("-N", "--nodes", type=int, default=1, help="The number of nodes (default: 1).")
     run.add_argument(
@@ -93,32 +104,12 @@ def get_parser():
         help="The number of CORES (not PUs) to bind per task.",
     )
     run.add_argument(
-        "--tasks-per-core",
+        "-g",
+        "--gpus-per-task",
         type=int,
         default=None,
-        help="The number of tasks per core.",
+        help="The number of GPUs per task.",
     )
-    run.add_argument(
-        "--silent",
-        dest="silent",
-        help="no additional output.",
-        default=False,
-        action="store_true",
-    )
-    run.add_argument(
-        "--quiet",
-        dest="quiet",
-        help="suppress additional output (only print fluxbind mapping)",
-        default=False,
-        action="store_true",
-    )
-    run.add_argument(
-        "--nocolor",
-        help="suppress color output (e.g., piping to log)",
-        default=False,
-        action="store_true",
-    )
-
     predict = subparsers.add_parser(
         "predict",
         formatter_class=argparse.RawTextHelpFormatter,
@@ -186,7 +177,7 @@ def run_fluxbind():
         sys.exit(0)
 
     setup_logger(
-        quiet=False,
+        quiet=args.quiet,
         debug=args.debug,
     )
 
