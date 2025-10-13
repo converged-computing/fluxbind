@@ -21,14 +21,22 @@ if [ -z "$JOB_SHAPE_FILE" ]; then
     exit 1
 fi
 
-# --- 3. Calculate Binding Location ---
 # Call the fluxbind helper script to get the target location string (e.g., "core:0" or "UNBOUND")
+# It ALWAYS returns a single line in the format: BIND_LOCATION,CUDA_DEVICE_ID
+# For CPU jobs, CUDA_DEVICE_ID will be the string "NONE".
 BIND_LOCATION=$(fluxbind shape --file "$JOB_SHAPE_FILE" --rank "$rank" --node-id "$node_id" --local-rank "$local_rank")
 
 # Exit if the helper script failed
 if [ $? -ne 0 ]; then
     echo "Error: The 'fluxbind shape' helper script failed for rank ${rank}." >&2
     exit 1
+fi
+
+# 3. Parse the simple, machine-readable output.
+BIND_LOCATION=$(echo "$BIND_INFO" | cut -d',' -f1)
+CUDA_DEVICE=$(echo "$BIND_INFO" | cut -d',' -f2)
+if [[ "$CUDA_DEVICE" != "NONE" ]]; then
+    export CUDA_VISIBLE_DEVICES=$CUDA_DEVICE
 fi
 
 if [[ "${BIND_LOCATION}" == "UNBOUND" ]]; then
@@ -84,6 +92,6 @@ if [[ "${BIND_LOCATION}" == "UNBOUND" ]]; then
     exec "$@"
 else
     # Use hwloc-bind to set the affinity and then execute the command.
-    if [[ "$FLUXBIND_SILENT" != "1" ]]; then  echo -e "${GREEN}fluxbind${RESET}: Rank ${rank} is bound to ${BIND_LOCATION} to execute: $@" >&2; fi
+    if [[ "$FLUXBIND_SILENT" != "1" ]]; then echo -e "${GREEN}fluxbind${RESET}: Rank ${rank} is bound to ${BIND_LOCATION} to execute: $@" >&2; fi
     exec hwloc-bind "${BIND_LOCATION}" -- "$@"
 fi

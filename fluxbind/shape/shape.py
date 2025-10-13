@@ -1,4 +1,5 @@
 import subprocess
+import sys
 
 import fluxbind.utils as utils
 
@@ -21,6 +22,19 @@ class Shape:
         self.num_cores = self.discover_hardware("core")
         self.num_pus = self.discover_hardware("pu")
         self.pus_per_core = self.num_pus // self.num_cores if self.num_cores > 0 else 0
+        self.gpu_objects = self.discover_gpus()
+
+    def discover_gpus(self) -> list:
+        """
+        Discovers available GPU objects using hwloc.
+        """
+        try:
+            cmd = f"hwloc-calc --whole-system {self.machine} -I os --filter-by-type-name CUDA"
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, check=True)
+            return result.stdout.strip().split()
+        except subprocess.CalledProcessError:
+            print("Warning: Could not discover any CUDA GPUs.", file=sys.stderr)
+            return []
 
     def load_file(self, filepath):
         """
@@ -91,6 +105,47 @@ class Shape:
                 return item["default"]
         return None
 
+    def get_gpu_binding_for_rank(self, hwloc_type, local_rank):
+        """
+        Get a GPU binding for a rank. Local means a numa node close by, remote not.
+        """
+        if not self.gpu_objects:
+            raise RuntimeError(
+                "Shape type is GPU-aware, but no GPUs were discovered on the system."
+            )
+
+        if local_rank >= len(self.gpu_objects):
+            raise IndexError(
+                f"local_rank {local_rank} is out of range for {len(self.gpu_objects)} GPUs."
+            )
+
+        my_gpu_object = self.gpu_objects[local_rank]
+
+        # Get PCI Bus ID for CUDA_VISIBLE_DEVICES
+        pci_bus_id_cmd = f"hwloc-pci-lookup {my_gpu_object}"
+        pci_res = subprocess.run(
+            pci_bus_id_cmd, shell=True, capture_output=True, text=True, check=True
+        )
+        cuda_devices = pci_res.stdout.strip()
+
+        # Find the local NUMA node for this GPU
+        local_numa_cmd = f"hwloc-calc {my_gpu_object} --ancestor numa -I"
+        numa_res = subprocess.run(
+            local_numa_cmd, shell=True, capture_output=True, text=True, check=True
+        )
+        local_numa_id = int(numa_res.stdout.strip())
+
+        if hwloc_type == "gpu-local":
+            binding_string = f"numa:{local_numa_id}"
+
+        # gpu-remote
+        else:
+            remote_numa_id = (local_numa_id + 1) % self.num_numa
+            binding_string = f"numa:{remote_numa_id}"
+
+        # Return both the binding and the device
+        return f"{binding_string},{cuda_devices}"
+
     def get_binding_for_rank(self, rank: int, node_id: int, local_rank: int) -> str:
         """
         The main method to get the final hwloc binding string for a process.
@@ -113,6 +168,18 @@ class Shape:
         if hwloc_type is None:
             raise ValueError(f"Matching rule has no 'type' defined: {rule}")
 
+        if hwloc_type in ["gpu-local", "gpu-remote"]:
+            return self.get_gpu_binding_for_rank(hwloc_type, local_rank)
+
+        cpu_binding_string = self.get_cpu_binding(hwloc_type, rule, local_rank)
+
+        # Return the CPU binding and the "NONE" sentinel for the device.
+        return f"{cpu_binding_string},NONE"
+
+    def get_cpu_binding(self, hwloc_type, rule, local_rank):
+        """
+        Get CPU binding for a rank.
+        """
         if hwloc_type.lower() == "unbound":
             return "UNBOUND"
 
