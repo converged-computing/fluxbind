@@ -1,8 +1,8 @@
-import re
 import subprocess
 import sys
 
 import fluxbind.shape.commands as commands
+import fluxbind.shape.gpu as gpus
 import fluxbind.utils as utils
 
 
@@ -21,34 +21,23 @@ class Shape:
         self.data = self.load_file(filepath)
         # This discovers and cache hardware properties on init
         # The expectation is that this is running from the node (task)
-        self.num_cores = self.discover_hardware("core")
-        self.num_pus = self.discover_hardware("pu")
+        self.num_cores = commands.hwloc_calc.count("core", within=self.machine)
+        self.num_pus = commands.hwloc_calc.count("pu", within=self.machine)
+        self.numa_node_cpusets = commands.hwloc_calc.list_cpusets("numa", within=self.machine)
         self.pus_per_core = self.num_pus // self.num_cores if self.num_cores > 0 else 0
         self.gpu_pci_ids = self.discover_gpus()
 
     def discover_gpus(self) -> list:
-        """Discovers available GPU PCI bus IDs."""
-        try:
-            return commands.nvidia_smi.get_pci_bus_ids()
-        except (RuntimeError, FileNotFoundError):
-            print("Warning: Could not discover GPUs. GPU binding unavailable.", file=sys.stderr)
-            return []
+        """
+        Discovers available GPU PCI bus IDs.
+        """
+        return commands.nvidia_smi.get_pci_bus_ids()
 
     def load_file(self, filepath):
         """
         Loads and parses the YAML shape file.
         """
         return utils.read_yaml(filepath)
-
-    def discover_hardware(self, hw_type: str) -> int:
-        """
-        Gets the number of a specific hardware object.
-        """
-        try:
-            result = commands.hwloc_calc.execute(["--number-of", hw_type, self.machine])
-            return int(result)
-        except (RuntimeError, ValueError) as e:
-            raise RuntimeError(f"Failed to determine number of '{hw_type}': {e}")
 
     @staticmethod
     def parse_range(range_str: str) -> set:
@@ -101,65 +90,119 @@ class Shape:
                 return item["default"]
         return None
 
-    def get_gpu_local_binding(self, rule: dict, local_rank: int) -> str:
+    def get_gpu_remote_binding(self, rule: dict, local_rank: int) -> str:
         """
-        Calculates binding for a rank based on its proximity to an assigned GPU.
-        Supports an optional prefer key for user-preferred object selection.
+        Calculate a binding that is deliberately remote from an assigned GPU.
         """
-        if not self.gpu_pci_ids:
-            raise RuntimeError(
-                "Shape specifies 'locality: gpu-local', but no GPUs were discovered."
-            )
+        if not self.gpu_pci_ids or not self.numa_node_cpusets:
+            raise RuntimeError("GPU/NUMA discovery failed, cannot perform remote binding.")
+        if len(self.numa_node_cpusets) < 2:
+            raise RuntimeError("'locality: gpu-remote' requires a multi-NUMA system.")
 
         num_gpus = len(self.gpu_pci_ids)
-        hwloc_type = rule.get("type")
-        if not hwloc_type:
-            raise ValueError("Rule with 'locality: gpu-local' must also specify a 'type'.")
 
-        # 1. Assign a GPU to this rank (round-robin)
+        # This assumes round robin assignment
         target_gpu_index = local_rank % num_gpus
         cuda_devices = str(target_gpu_index)
         target_gpu_pci_id = self.gpu_pci_ids[target_gpu_index]
 
-        # 2. Get the cpuset for the GPU's locality domain
-        gpu_locality_cpuset = commands.hwloc_calc.execute([f"pci={target_gpu_pci_id}"])
-        cpu_binding_string = ""
+        # Figure out remote NUMA that aren't in local set
+        local_cpuset = commands.hwloc_calc.get_cpuset(f"pci={target_gpu_pci_id}")
+        remote_numa_cpusets = [cs for cs in self.numa_node_cpusets if cs != local_cpuset]
+        if not remote_numa_cpusets:
+            raise RuntimeError(f"Could not find a NUMA node remote from GPU {target_gpu_index}.")
 
-        # 3. Determine the final CPU binding
+        # if the user asks for an offset. Otherwise, just take first
+        offset = rule.get("offset", 0)
+        if offset >= len(remote_numa_cpusets):
+            raise ValueError(f"Offset {offset} is out of range.")
+        target_remote_cpuset = remote_numa_cpusets[offset]
+        return self.get_binding_within_domain(rule, local_rank, target_remote_cpuset, cuda_devices)
+
+    def get_gpu_local_binding(self, rule: dict, local_rank: int) -> str:
+        """
+        Calculate binding for a rank based on its proximity to an assigned GPU.
+        """
+        # Get the assignment.
+        assignment = gpus.GPUAssignment.for_rank(local_rank, self.gpu_pci_ids)
+
+        # Find the LOCAL cpuset for this assigned GPU
+        local_cpuset = commands.hwloc_calc.get_cpuset(f"pci={assignment.pci_id}")
+
+        # This is shared logic for binding within a domain
+        return self.get_binding_within_domain(
+            rule, local_rank, local_cpuset, assignment.cuda_devices
+        )
+
+    def get_gpu_remote_binding(self, rule: dict, local_rank: int) -> str:
+        """
+        Calculate a binding that is deliberately remote from an assigned GPU.
+        """
+        if len(self.numa_node_cpusets) < 2:
+            raise RuntimeError("'locality: gpu-remote' requires a multi-NUMA system.")
+
+        assignment = gpus.GPUAssignment.for_rank(local_rank, self.gpu_pci_ids)
+        local_cpuset = commands.hwloc_calc.get_cpuset(f"pci={assignment.pci_id}")
+
+        # Find all REMOTE NUMA domains
+        remote_numa_cpusets = [cs for cs in self.numa_node_cpusets if cs != local_cpuset]
+        if not remote_numa_cpusets:
+            raise RuntimeError(
+                f"Could not find a NUMA node remote from the one for GPU {assignment.index}."
+            )
+
+        # Allow for an offset, default to 0 (the first in list, no offset)
+        offset = rule.get("offset", 0)
+        if offset >= len(remote_numa_cpusets):
+            raise ValueError(f"Offset {offset} is out of range.")
+        target_remote_cpuset = remote_numa_cpusets[offset]
+
+        # 5. Delegate to the common logic, passing the REMOTE cpuset
+        return self.get_binding_within_domain(
+            rule, local_rank, target_remote_cpuset, assignment.cuda_devices
+        )
+
+    def get_binding_within_domain(self, rule, local_rank, domain_cpuset, cuda_devices):
+        """
+        Helper to calculate a CPU binding within a given cpuset domain.
+        """
+        hwloc_type = rule.get("type")
+        num_gpus = len(self.gpu_pci_ids)
+
         if hwloc_type in ["numa", "package", "l3cache"]:
-            cpu_binding_string = gpu_locality_cpuset
+            return f"{domain_cpuset},{cuda_devices}"
 
         elif hwloc_type in ["core", "pu", "l2cache"]:
-            all_objects_in_domain_str = commands.hwloc_calc.execute(
-                [gpu_locality_cpuset, "--intersect", hwloc_type]
-            )
-            available_indices = all_objects_in_domain_str.split(",")
-            target_object_index = None
-
-            # Is the user asking to prefer a specific identifier?
+            target_object_index_str = None
             if "prefer" in rule:
-                requested_index = str(rule["prefer"])
-                if requested_index in available_indices:
-                    target_object_index = requested_index
-
-            if target_object_index is None:
-                rank_index_in_gpu_group = local_rank // num_gpus
                 try:
-                    target_object_index = available_indices[rank_index_in_gpu_group]
-                except IndexError:
+                    requested_index = int(rule["prefer"])
+                except (ValueError, TypeError):
                     raise ValueError(
-                        f"Cannot find the {rank_index_in_gpu_group}-th '{hwloc_type}' for local_rank {local_rank} "
-                        f"within the GPU's locality. Only {len(available_indices)} are available."
+                        f"The 'prefer' key must be a simple integer, but got: {rule['prefer']}"
                     )
 
-            cpu_binding_string = f"{hwloc_type}:{target_object_index}"
+                # Attempt to get the preferred object. If it fails, we know it's not valid.
+                try:
+                    binding_obj = commands.hwloc_calc.get_object_in_set(
+                        domain_cpuset, hwloc_type, requested_index
+                    )
+                    target_object_index_str = binding_obj
+                except Exception:
+                    print(
+                        f"Warning: Preferred index '{requested_index}' is not available in domain {domain_cpuset}. Falling back."
+                    )
+
+            # If no preference was given, or the preference was invalid, fall back to default.
+            if target_object_index_str is None:
+                rank_index_in_group = local_rank // num_gpus
+                target_object_index_str = commands.hwloc_calc.get_object_in_set(
+                    domain_cpuset, hwloc_type, rank_index_in_group
+                )
+
+            return f"{target_object_index_str},{cuda_devices}"
         else:
-            raise ValueError(f"Unsupported type '{hwloc_type}' for 'locality: gpu-local' binding.")
-
-        if not cpu_binding_string:
-            raise RuntimeError("Failed to calculate a valid cpu_binding_string.")
-
-        return f"{cpu_binding_string},{cuda_devices}"
+            raise ValueError(f"Unsupported type '{hwloc_type}' for GPU locality binding.")
 
     def get_binding_for_rank(self, rank: int, node_id: int, local_rank: int) -> str:
         """
@@ -186,6 +229,9 @@ class Shape:
         # Are we doing something with GPU?
         if rule.get("bind") == "gpu-local":
             return self.get_gpu_local_binding(rule, local_rank)
+        if rule.get("bind") == "gpu-remote":
+            return self.get_gpu_remote_binding(rule, local_rank)
+
         cpu_binding_string = self.get_cpu_binding(hwloc_type, rule, local_rank)
 
         # Return the CPU binding and the "NONE" sentinel for the device.
