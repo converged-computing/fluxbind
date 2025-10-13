@@ -1,3 +1,4 @@
+import re
 import subprocess
 import sys
 
@@ -75,10 +76,23 @@ class Shape:
 
         This assumes running on the rank where the binding is asked for.
         """
-        formula = str(formula_template).replace("$local_rank", str(local_rank))
-        command = f'echo "{formula}"'
+        processed_formula = str(formula_template)
+        substitutions = re.findall(r"\{\{([^}]+)\}\}", processed_formula)
+        for command_to_run in set(substitutions):
+            try:
+                result = subprocess.run(
+                    command_to_run, shell=True, capture_output=True, text=True, check=True
+                )
+                placeholder = f"{{{{{command_to_run}}}}}"
+                processed_formula = processed_formula.replace(placeholder, result.stdout.strip())
+            except subprocess.CalledProcessError as e:
+                raise RuntimeError(f"Error executing sub-command '{command_to_run}': {e}")
+
+        # Substitute local_rank and evaluate final expression
+        final_expression = processed_formula.replace("$local_rank", str(local_rank))
+        command = f'echo "{final_expression}"'
         result = subprocess.run(command, shell=True, capture_output=True, text=True, check=True)
-        return int(result.stdout.strip())
+        return result.stdout.strip()
 
     def find_matching_rule(self, rank: int, node_id: int) -> dict:
         """
@@ -105,15 +119,12 @@ class Shape:
                 return item["default"]
         return None
 
-    def get_gpu_binding_for_rank(self, hwloc_type, local_rank):
+    def get_gpu_binding_for_rank(self, on_domain, hwloc_type, local_rank):
         """
         Get a GPU binding for a rank. Local means a numa node close by, remote not.
         """
         if not self.gpu_objects:
-            raise RuntimeError(
-                "Shape type is GPU-aware, but no GPUs were discovered on the system."
-            )
-
+            raise RuntimeError("Shape is GPU-aware, but no GPUs were discovered.")
         if local_rank >= len(self.gpu_objects):
             raise IndexError(
                 f"local_rank {local_rank} is out of range for {len(self.gpu_objects)} GPUs."
@@ -121,29 +132,36 @@ class Shape:
 
         my_gpu_object = self.gpu_objects[local_rank]
 
-        # Get PCI Bus ID for CUDA_VISIBLE_DEVICES
         pci_bus_id_cmd = f"hwloc-pci-lookup {my_gpu_object}"
-        pci_res = subprocess.run(
+        cuda_devices = subprocess.run(
             pci_bus_id_cmd, shell=True, capture_output=True, text=True, check=True
-        )
-        cuda_devices = pci_res.stdout.strip()
+        ).stdout.strip()
 
-        # Find the local NUMA node for this GPU
         local_numa_cmd = f"hwloc-calc {my_gpu_object} --ancestor numa -I"
-        numa_res = subprocess.run(
-            local_numa_cmd, shell=True, capture_output=True, text=True, check=True
+        local_numa_id = int(
+            subprocess.run(
+                local_numa_cmd, shell=True, capture_output=True, text=True, check=True
+            ).stdout.strip()
         )
-        local_numa_id = int(numa_res.stdout.strip())
 
-        if hwloc_type == "gpu-local":
-            binding_string = f"numa:{local_numa_id}"
-
-        # gpu-remote
-        else:
+        target_numa_location = ""
+        if on_domain == "gpu-local":
+            target_numa_location = f"numa:{local_numa_id}"
+        else:  # gpu-remote
             remote_numa_id = (local_numa_id + 1) % self.num_numa
-            binding_string = f"numa:{remote_numa_id}"
+            target_numa_location = f"numa:{remote_numa_id}"
 
-        # Return both the binding and the device
+        # If the requested type is just 'numa', we're done.
+        if hwloc_type == "numa":
+            return f"{target_numa_location},{cuda_devices}"
+
+        # Otherwise, find the first object of the requested type WITHIN that NUMA domain.
+        # This is a powerful composition of the two concepts.
+        # E.g., find the first 'core' on the 'gpu-local' NUMA domain.
+        cmd = f"hwloc-calc {target_numa_location} --intersect {hwloc_type} --first"
+        binding_string = subprocess.run(
+            cmd, shell=True, capture_output=True, text=True, check=True
+        ).stdout.strip()
         return f"{binding_string},{cuda_devices}"
 
     def get_binding_for_rank(self, rank: int, node_id: int, local_rank: int) -> str:
@@ -168,8 +186,9 @@ class Shape:
         if hwloc_type is None:
             raise ValueError(f"Matching rule has no 'type' defined: {rule}")
 
-        if hwloc_type in ["gpu-local", "gpu-remote"]:
-            return self.get_gpu_binding_for_rank(hwloc_type, local_rank)
+        on_domain = rule.get("on")
+        if on_domain in ["gpu-local", "gpu-remote"]:
+            return self.get_gpu_binding_for_rank(on_domain, hwloc_type, local_rank)
 
         cpu_binding_string = self.get_cpu_binding(hwloc_type, rule, local_rank)
 
