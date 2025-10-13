@@ -1,0 +1,3 @@
+default:
+  type: core
+  on: gpu-local
