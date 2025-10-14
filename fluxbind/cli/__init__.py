@@ -136,6 +136,9 @@ def get_parser():
     shape.add_argument(
         "--local-rank", required=True, type=int, help="Rank of the process on the local node."
     )
+    shape.add_argument(
+        "--gpus-per-task", dest="gpus_per_task", type=int, help="Number of GPUs per task."
+    )
 
     for command in [predict, run]:
         command.add_argument(

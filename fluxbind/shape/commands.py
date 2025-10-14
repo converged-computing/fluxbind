@@ -1,6 +1,6 @@
-import shlex
 import subprocess
 import sys
+from itertools import zip_longest
 
 
 class Command:
@@ -29,17 +29,43 @@ class Command:
 class HwlocCalcCommand(Command):
     name = "hwloc-calc"
 
+    def _parse_cpuset_to_list(self, cpuset_str: str) -> list[int]:
+        """
+        Convert a potentially comma-separated hex string into a list of integers.
+        """
+        if not cpuset_str or cpuset_str.lower() in ["0x0", "0"]:
+            return [0]
+        return [int(chunk, 16) for chunk in cpuset_str.strip().split(",")]
+
+    def _operate_on_lists(self, list_a: list[int], list_b: list[int], operator: str) -> list[int]:
+        """
+        Perform a bitwise operation on two lists of cpuset integers.
+        """
+        max_len = max(len(list_a), len(list_b))
+        result_list = []
+        for i in range(max_len):
+            val_a = list_a[i] if i < len(list_a) else 0
+            val_b = list_b[i] if i < len(list_b) else 0
+
+            if operator == "+":
+                result_list.append(val_a | val_b)
+            elif operator == "x":
+                result_list.append(val_a & val_b)
+            elif operator == "^":
+                result_list.append(val_a ^ val_b)
+            elif operator == "~":
+                result_list.append(val_a & ~val_b)
+            else:
+                raise ValueError(f"Unsupported operator '{operator}'")
+        return result_list
+
     def count(self, hw_type: str, within: str = "machine:0") -> int:
         """
         Returns the total number of a specific hardware object.
-
-        Args:
-            hw_type: The type of object to count (e.g., "core", "numa").
-            within_object: Optional object to restrict the count to (e.g., "numa:0").
         """
         try:
             args = ["--number-of", hw_type, within]
-            result_stdout = self.run([self.name] + args)
+            result_stdout = self.run([self.name] + args, shell=False)
             return int(result_stdout)
         except (RuntimeError, ValueError) as e:
             raise RuntimeError(f"Failed to count number of '{hw_type}': {e}")
@@ -47,45 +73,48 @@ class HwlocCalcCommand(Command):
     def list_cpusets(self, hw_type: str, within: str = "machine:0") -> list[str]:
         """
         Returns a list of cpuset strings for each object of a given type.
-
-        Args:
-            hw_type: The type of object to list (e.g., "numa").
-            within_object: Optional object to restrict the list to.
         """
         try:
-            # Get the indices of all objects of this type
             args_intersect = ["--intersect", hw_type, within]
-            indices_str = self.run([self.name] + args_intersect)
+            indices_str = self.run([self.name] + args_intersect, shell=False)
             indices = indices_str.split(",")
-
-            # Cut out early
             if not indices or not indices[0]:
                 return []
-
-            # For each index, get its specific cpuset
-            return [self.run([self.name, f"{hw_type}:{i}"]) for i in indices]
+            return [self.run([self.name, f"{hw_type}:{i}"], shell=False) for i in indices]
         except (RuntimeError, ValueError) as e:
             raise RuntimeError(f"Failed to list cpusets for '{hw_type}': {e}")
 
     def get_cpuset(self, location: str) -> str:
         """
-        Gets the cpuset for a single, specific location string (e.g., "pci=...", "core:0").
+        Gets the cpuset for one or more space/operator-separated location strings.
         """
-        return self.run([self.name, location])
+        return self.run(f"{self.name} {location}", shell=True)
 
     def get_object_in_set(self, cpuset: str, obj_type: str, index: int) -> str:
         """
         Gets the Nth object of a type within a given cpuset.
-        e.g., find the 1st 'core' within cpuset '0x00ff'.
         """
-        # This uses the robust two-step process internally
-        all_objects_str = self.run([self.name, cpuset, "--intersect", obj_type])
-        available_indices = all_objects_str.split(",")
+        list_cmd = f"{self.name} '{cpuset}' --intersect {obj_type}"
+        all_indices_str = self.run(list_cmd, shell=True)
+        available_indices = all_indices_str.split(",")
         try:
             target_index = available_indices[index]
             return f"{obj_type}:{target_index}"
         except IndexError:
             raise ValueError(f"Cannot find the {index}-th '{obj_type}' in cpuset {cpuset}.")
+
+    def union_of_locations(self, locations: list[str]) -> str:
+        """
+        Calculates the union of a list of hwloc location strings using Python logic.
+        Returns a single, SPACE-separated string of hex cpusets.
+        """
+        union_mask_list = [0]
+
+        for loc in locations:
+            loc_cpuset_str = self.get_cpuset(loc)
+            loc_cpuset_list = self._parse_cpuset_to_list(loc_cpuset_str)
+            union_mask_list = self._union_of_lists(union_mask_list, loc_cpuset_list)
+        return " ".join([hex(chunk) for chunk in union_mask_list])
 
 
 class NvidiaSmiCommand(Command):

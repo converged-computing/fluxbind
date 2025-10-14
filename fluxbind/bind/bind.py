@@ -209,6 +209,9 @@ class CommandLineRunner:
         """
         if self.quiet:
             cmd += ["--env", "FLUXBIND_QUIET=1"]
+        # This is to pass to the shape calculator
+        if self.gpus_per_task not in [0, None]:
+            cmd += ["--env", f"GPUS_PER_TASK={self.gpus_per_task}"]
         if self.nocolor:
             cmd += ["--env", "FLUXBIND_NOCOLOR=1"]
         if self.silent:
