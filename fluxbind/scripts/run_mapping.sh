@@ -21,11 +21,14 @@ if [ -z "$JOB_SHAPE_FILE" ]; then
     exit 1
 fi
 
+gpus_per_task=${GPUS_PER_TASK:-1}
+
 # Call the fluxbind helper script to get the target location string (e.g., "core:0" or "UNBOUND")
 # It ALWAYS returns a single line in the format: BIND_LOCATION,CUDA_DEVICE_ID
 # For CPU jobs, CUDA_DEVICE_ID will be the string "NONE".
-echo fluxbind shape --file "$JOB_SHAPE_FILE" --rank "$rank" --node-id "$node_id" --local-rank "$local_rank"
-BIND_INFO=$(fluxbind shape --file "$JOB_SHAPE_FILE" --rank "$rank" --node-id "$node_id" --local-rank "$local_rank")
+echo fluxbind shape --file "$JOB_SHAPE_FILE" --rank "$rank" --node-id "$node_id" --local-rank "$local_rank" --gpus-per-task "$gpus_per_task"
+BIND_INFO=$(fluxbind shape --file "$JOB_SHAPE_FILE" --rank "$rank" --node-id "$node_id" --local-rank "$local_rank" --gpus-per-task "$gpus_per_task")
+echo $BIND_INFO
 
 # Exit if the helper script failed
 if [ $? -ne 0 ]; then
@@ -34,10 +37,14 @@ if [ $? -ne 0 ]; then
 fi
 
 # 3. Parse the simple, machine-readable output.
-BIND_LOCATION=$(echo "$BIND_INFO" | cut -d',' -f1)
-CUDA_DEVICE=$(echo "$BIND_INFO" | cut -d',' -f2)
-if [[ "$CUDA_DEVICE" != "NONE" ]]; then
-    export CUDA_VISIBLE_DEVICES=$CUDA_DEVICE
+BIND_LOCATION="${BIND_INFO%;*}"
+CUDA_DEVICES="${BIND_INFO#*;}"
+
+echo "BIND_LOCATION: ${BIND_LOCATION}"
+echo "CUDA_DEVICES: ${CUDA_DEVICES}"
+
+if [[ "$CUDA_DEVICES" != "NONE" ]]; then
+    export CUDA_VISIBLE_DEVICES=$CUDA_DEVICES
 fi
 
 if [[ "${BIND_LOCATION}" == "UNBOUND" ]]; then
@@ -81,26 +88,27 @@ if [[ "$FLUXBIND_QUIET" != "1" ]]
   echo -e "${prefix}: Effective Cpuset Mask:  ${CYAN}$cpuset_mask${RESET}"
   echo -e "${prefix}: Logical CPUs (PUs):     ${BLUE}${logical_cpu_list:-none}${RESET}"
   echo -e "${prefix}: Physical Cores:         ${ORANGE}${physical_core_list:-none}${RESET}"
-  if [[ "$CUDA_DEVICE" != "NONE" ]]; then
-    echo -e "${prefix}: CUDA Devices:           ${YELLOW}${CUDA_DEVICE}${RESET}"
+  if [[ "$CUDA_DEVICES" != "NONE" ]]; then
+    echo -e "${prefix}: CUDA Devices:           ${YELLOW}${CUDA_DEVICES}${RESET}"
   fi
   echo
 fi
 
 # The 'exec' command replaces this script's process, preserving the env.
 # I learned this developing singularity shell, exec, etc :)
+if [[ "${BIND_LOCATION}" == "UNBOUND" ]]; then
+    if [[ "$FLUXBIND_SILENT" != "1" ]]; then echo -e "${GREEN}fluxbind${RESET}: Rank ${rank} is ${BIND_LOCATION} to execute: $@" >&2; fi
+else
+  if [[ "$CUDA_DEVICES" == "NONE" ]]; then
+      echo -e "${GREEN}fluxbind${RESET}: Rank ${rank} is bound to ${BIND_LOCATION} cuda:${CUDA_DEVICES} to execute: $@" >&2;
+  else
+      echo -e "${GREEN}fluxbind${RESET}: Rank ${rank} is bound to ${BIND_LOCATION} to execute: $@" >&2;
+  fi
+fi
 
 if [[ "${BIND_LOCATION}" == "UNBOUND" ]]; then
     # Execute the command directly without changing affinity.
-    if [[ "$FLUXBIND_SILENT" != "1" ]]; then echo -e "${GREEN}fluxbind${RESET}: Rank ${rank} is ${BIND_LOCATION} to execute: $@" >&2; fi
     exec "$@"
 else
-    # Use hwloc-bind to set the affinity and then execute the command.
-    if [[ "$FLUXBIND_SILENT" != "1" ]]; then
-      if [[ "$CUDA_DEVICE" == "NONE" ]]; then
-        echo -e "${GREEN}fluxbind${RESET}: Rank ${rank} is bound to ${BIND_LOCATION} cuda:${CUDA_DEVICE} to execute: $@" >&2; fi
-      else
-        echo -e "${GREEN}fluxbind${RESET}: Rank ${rank} is bound to ${BIND_LOCATION} to execute: $@" >&2; fi
-      fi
     exec hwloc-bind "${BIND_LOCATION}" -- "$@"
 fi
