@@ -1,6 +1,6 @@
+import json
 import subprocess
 import sys
-from itertools import zip_longest
 
 
 class Command:
@@ -19,7 +19,6 @@ class Command:
             return result.stdout.strip()
         except subprocess.CalledProcessError as e:
             cmd_str = command if shell else " ".join(command)
-            print(f"Error running '{cmd_str}': {e.stderr}", file=sys.stderr)
             raise RuntimeError("Command execution failed.") from e
         except FileNotFoundError as e:
             cmd_str = command[0] if isinstance(command, list) else command.split()[0]
@@ -29,7 +28,7 @@ class Command:
 class HwlocCalcCommand(Command):
     name = "hwloc-calc"
 
-    def _parse_cpuset_to_list(self, cpuset_str: str) -> list[int]:
+    def parse_cpuset_to_list(self, cpuset_str: str) -> list[int]:
         """
         Convert a potentially comma-separated hex string into a list of integers.
         """
@@ -37,7 +36,7 @@ class HwlocCalcCommand(Command):
             return [0]
         return [int(chunk, 16) for chunk in cpuset_str.strip().split(",")]
 
-    def _operate_on_lists(self, list_a: list[int], list_b: list[int], operator: str) -> list[int]:
+    def operate_on_lists(self, list_a: list[int], list_b: list[int], operator: str) -> list[int]:
         """
         Perform a bitwise operation on two lists of cpuset integers.
         """
@@ -112,8 +111,8 @@ class HwlocCalcCommand(Command):
 
         for loc in locations:
             loc_cpuset_str = self.get_cpuset(loc)
-            loc_cpuset_list = self._parse_cpuset_to_list(loc_cpuset_str)
-            union_mask_list = self._union_of_lists(union_mask_list, loc_cpuset_list)
+            loc_cpuset_list = self.parse_cpuset_to_list(loc_cpuset_str)
+            union_mask_list = self.operate_on_lists(union_mask_list, loc_cpuset_list, "+")
         return " ".join([hex(chunk) for chunk in union_mask_list])
 
 
@@ -135,5 +134,28 @@ class NvidiaSmiCommand(Command):
         return [bus_id for bus_id in ids if bus_id]
 
 
+class RocmSmiCommand(Command):
+    name = "rocm-smi"
+
+    def get_pci_bus_ids(self) -> list[str]:
+        """
+        Specifically queries for and returns a list of GPU PCI bus IDs.
+        """
+        # The '--showbus' and '--json' flags provide a reliable, machine-readable output.
+        command_str = f"{self.name} --showbus --json"
+
+        # {"card0": {"PCI Bus": "0000:03:00.0"}, "card1": ..., "card7": {"PCI Bus": "0000:E3:00.0"}}
+        output = self.run(command_str, shell=True)
+        data = json.loads(output)
+
+        pci_ids = []
+        # I'm choosing not to sort so the devices are read in the order provided.
+        for card_key in data.keys():
+            card_info = data[card_key]
+            pci_ids.append(card_info.get("PCI Bus"))
+        return pci_ids
+
+
 hwloc_calc = HwlocCalcCommand()
 nvidia_smi = NvidiaSmiCommand()
+rocm_smi = RocmSmiCommand()
