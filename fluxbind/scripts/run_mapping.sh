@@ -28,7 +28,7 @@ gpus_per_task=${GPUS_PER_TASK:-1}
 # For CPU jobs, CUDA_DEVICE_ID will be the string "NONE".
 echo fluxbind shape --file "$JOB_SHAPE_FILE" --rank "$rank" --node-id "$node_id" --local-rank "$local_rank" --gpus-per-task "$gpus_per_task"
 BIND_INFO=$(fluxbind shape --file "$JOB_SHAPE_FILE" --rank "$rank" --node-id "$node_id" --local-rank "$local_rank" --gpus-per-task "$gpus_per_task")
-echo $BIND_INFO
+echo
 
 # Exit if the helper script failed
 if [ $? -ne 0 ]; then
@@ -39,9 +39,6 @@ fi
 # 3. Parse the simple, machine-readable output.
 BIND_LOCATION="${BIND_INFO%;*}"
 CUDA_DEVICES="${BIND_INFO#*;}"
-
-echo "BIND_LOCATION: ${BIND_LOCATION}"
-echo "CUDA_DEVICES: ${CUDA_DEVICES}"
 
 if [[ "$CUDA_DEVICES" != "NONE" ]]; then
     export CUDA_VISIBLE_DEVICES=$CUDA_DEVICES
@@ -56,9 +53,9 @@ if [[ "${BIND_LOCATION}" == "UNBOUND" ]]; then
 else
     # For a bound task, calculate the mask and lists from the target location string.
     binding_source=${BIND_LOCATION}
-    cpuset_mask=$(hwloc-calc "${BIND_LOCATION}")
-    logical_cpu_list=$(hwloc-calc "${BIND_LOCATION}" --intersect PU 2>/dev/null)
-    physical_core_list=$(hwloc-calc "${BIND_LOCATION}" --intersect core 2>/dev/null)
+    cpuset_mask=$(hwloc-calc ${BIND_LOCATION})
+    logical_cpu_list=$(hwloc-calc ${BIND_LOCATION} --intersect PU 2>/dev/null)
+    physical_core_list=$(hwloc-calc ${BIND_LOCATION} --intersect core 2>/dev/null)
 fi
 
 if [[ "$FLUXBIND_NOCOLOR" != "1" ]]
@@ -110,5 +107,5 @@ if [[ "${BIND_LOCATION}" == "UNBOUND" ]]; then
     # Execute the command directly without changing affinity.
     exec "$@"
 else
-    exec hwloc-bind "${BIND_LOCATION}" -- "$@"
+    exec hwloc-bind ${BIND_LOCATION} -- "$@"
 fi

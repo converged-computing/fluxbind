@@ -26,13 +26,53 @@ class Shape:
         self.num_pus = commands.hwloc_calc.count("pu", within=self.machine)
         self.numa_node_cpusets = commands.hwloc_calc.list_cpusets("numa", within=self.machine)
         self.pus_per_core = self.num_pus // self.num_cores if self.num_cores > 0 else 0
-        self.gpu_pci_ids = self.discover_gpus()
+        # For GPU topology, we care about NUMA nodes.
+        self.gpus_by_numa = self.discover_gpus()
 
-    def discover_gpus(self) -> list:
+    def discover_gpus(self):
         """
         Discovers available GPU PCI bus IDs.
         """
-        return commands.nvidia_smi.get_pci_bus_ids()
+        all_pci_ids = []
+
+        # Try for nvidia and then rocm
+        for command in [commands.nvidia_smi.get_pci_bus_ids, commands.rocm_smi.get_pci_bus_ids]:
+            try:
+                # This is pci addresses ACROSS numa nodes
+                all_pci_ids = command()
+            except Exception:
+                pass
+
+        gpus_by_numa = {}
+
+        # For each GPU, find out which NUMA node it belongs to
+        for pci_id in all_pci_ids:
+            # Ask hwloc for the cpuset where the pci lives.
+            # I'm not sure if this will work for nvidia if doens't show in lstopo
+            gpu_cpuset = commands.hwloc_calc.get_cpuset(f"pci={pci_id}")
+            found_numa = False
+            for i, numa_cpuset in enumerate(self.numa_node_cpusets):
+                # Check if the GPU's cpuset is a subset of this NUMA node's cpuset
+                intersection = commands.hwloc_calc.get_cpuset(f"'{gpu_cpuset}' x '{numa_cpuset}'")
+
+                if intersection == gpu_cpuset:
+                    if i not in gpus_by_numa:
+                        gpus_by_numa[i] = []
+                    gpus_by_numa[i].append(pci_id)
+                    found_numa = True
+                    break
+
+            # Raise an error - I want to know about this case.
+            if not found_numa:
+                raise ValueError(f"Warning: Could not determine NUMA locality for GPU {pci_id}")
+
+        # Make an ordered set just for easy list access
+        self.ordered_gpus = []
+        for numa_idx in sorted(gpus_by_numa.keys()):
+            for pci_id in gpus_by_numa[numa_idx]:
+                self.ordered_gpus.append({"pci_id": pci_id, "numa_index": numa_idx})
+
+        return gpus_by_numa
 
     def load_file(self, filepath):
         """
@@ -92,61 +132,106 @@ class Shape:
         return None
 
     def get_gpu_local_binding(self, rule: dict, local_rank: int, gpus_per_task: int) -> str:
-        assignment = gpus.GPUAssignment.for_rank(local_rank, gpus_per_task, self.gpu_pci_ids)
-        pci_locations = [f"pci={pci_id}" for pci_id in assignment.pci_ids]
-        domain_cpuset = commands.hwloc_calc.union_of_locations(pci_locations)
-        cpu_binding_string = self.get_gpu_cpu_binding(
-            rule, local_rank, gpus_per_task, domain_cpuset
-        )
-        return f"{cpu_binding_string};{assignment.cuda_devices}"
+        """
+        Calculate a 'gpu-local' binding using the topology-aware ordered GPU list.
+        """
+        if not self.ordered_gpus:
+            raise RuntimeError("Shape specifies 'bind: gpu-local', but no GPUs were discovered.")
+
+        # Assign a slice of GPUs from the canonical, ordered list.
+        start_idx = local_rank * gpus_per_task
+        end_idx = start_idx + gpus_per_task
+        if end_idx > len(self.ordered_gpus):
+            raise ValueError(f"Not enough total GPUs to satisfy request for rank {local_rank}.")
+
+        assigned_gpu_slice = self.ordered_gpus[start_idx:end_idx]
+        cuda_devices = ",".join([str(start_idx + i) for i, _ in enumerate(assigned_gpu_slice)])
+
+        # The CPU domain is the union of NUMA nodes for the assigned GPUs.
+        local_numa_indices = sorted(list({gpu["numa_index"] for gpu in assigned_gpu_slice}))
+        domain_locations = [f"numa:{i}" for i in local_numa_indices]
+        domain = " ".join(domain_locations)  # e.g., "numa:0" or "numa:0 numa:1"
+
+        # Get the final CPU binding WITHIN that domain.
+        cpu_binding_string = self.get_binding_in_gpu_domain(rule, local_rank, gpus_per_task, domain)
+        return f"{cpu_binding_string};{cuda_devices}"
 
     def get_gpu_remote_binding(self, rule: dict, local_rank: int, gpus_per_task: int) -> str:
+        """
+        Calculates a 'gpu-remote' binding using the topology-aware ordered GPU list.
+        """
         if len(self.numa_node_cpusets) < 2:
             raise RuntimeError("'bind: gpu-remote' is invalid on a single-NUMA system.")
-        assignment = gpus.GPUAssignment.for_rank(local_rank, gpus_per_task, self.gpu_pci_ids)
-        primary_gpu_pci_id = assignment.pci_ids[0]
-        primary_gpu_numa_cpuset = commands.hwloc_calc.get_cpuset(f"numaof:pci={primary_gpu_pci_id}")
-        remote_numa_cpusets = [cs for cs in self.numa_node_cpusets if cs != primary_gpu_numa_cpuset]
-        if not remote_numa_cpusets:
-            raise RuntimeError(
-                f"Could not find a NUMA node remote from GPU {assignment.indices[0]}."
-            )
-        offset = rule.get("offset", 0)
-        domain = remote_numa_cpusets[offset]
-        cpu_binding_string = self.get_gpu_cpu_binding(rule, local_rank, gpus_per_task, domain)
-        return f"{cpu_binding_string};{assignment.cuda_devices}"
+        if not self.ordered_gpus:
+            raise RuntimeError("Shape specifies 'bind: gpu-remote', but no GPUs were discovered.")
 
-    def get_gpu_cpu_binding(
+        # Assign a slice of GPUs to determine the local NUMA domains.
+        start_idx = local_rank * gpus_per_task
+        end_idx = start_idx + gpus_per_task
+        if end_idx > len(self.ordered_gpus):
+            raise ValueError(f"Not enough total GPUs to satisfy request for rank {local_rank}.")
+
+        assigned_gpu_slice = self.ordered_gpus[start_idx:end_idx]
+        cuda_devices = ",".join([str(start_idx + i) for i, _ in enumerate(assigned_gpu_slice)])
+
+        # Find the set of all local NUMA domains for this rank's GPUs.
+        local_numa_indices = {gpu["numa_index"] for gpu in assigned_gpu_slice}
+
+        # Find all remote NUMA domains.
+        all_numa_indices = set(range(len(self.numa_node_cpusets)))
+        remote_numa_indices = sorted(list(all_numa_indices - local_numa_indices))
+
+        if not remote_numa_indices:
+            raise RuntimeError(
+                f"Cannot find a remote NUMA node for rank {local_rank}; its GPUs span all NUMA domains."
+            )
+
+        # 4. Select the target remote domain.
+        offset = rule.get("offset", 0)
+        if offset >= len(remote_numa_indices):
+            raise ValueError(f"Offset {offset} is out of range for remote NUMA domains.")
+
+        target_remote_numa_idx = remote_numa_indices[offset]
+        domain = f"numa:{target_remote_numa_idx}"
+
+        # Get the final CPU binding WITHIN that remote domain.
+        cpu_binding_string = self.get_binding_in_gpu_domain(rule, local_rank, gpus_per_task, domain)
+        return f"{cpu_binding_string};{cuda_devices}"
+
+    def get_binding_in_gpu_domain(
         self, rule: dict, local_rank: int, gpus_per_task: int, domain: str
     ) -> str:
+        """
+        A dedicated binding engine for GPU jobs. It applies user preferences within a calculated domain
+        (e.g., "numa:0" or "numa:0 numa:1").
+        """
         hwloc_type = rule.get("type")
         if not hwloc_type:
             raise ValueError("Rule with GPU binding must have a 'type'.")
 
         if hwloc_type in ["numa", "package", "l3cache", "machine"]:
-            # The user wants to bind to the entire domain, try to get location for it
-            return commands.hwloc_calc.get_cpuset(f"'{domain}'")
+            # If a broad type is requested, the binding is the domain itself.
+            return domain
 
-        elif hwloc_type in ["core", "pu", "l2cache"]:
-            # This logic returns a simple name like "core:5", which is correct.
-            if "prefer" in rule:
-                try:
-                    requested_index = int(rule["prefer"])
-                    return commands.hwloc_calc.get_object_in_set(
-                        domain, hwloc_type, requested_index
-                    )
-                except (ValueError, RuntimeError, TypeError):
-                    print(
-                        f"Warning: Preferred index '{rule['prefer']}' invalid/not in domain '{domain}'. Falling back.",
-                        file=sys.stderr,
-                    )
+        if "prefer" in rule:
+            try:
+                requested_index = int(rule["prefer"])
+                # Validate by attempting to get the object.
+                return commands.hwloc_calc.get_object_in_set(domain, hwloc_type, requested_index)
+            except (ValueError, RuntimeError, TypeError):
+                print(
+                    f"Warning: Preferred index '{rule['prefer']}' invalid/not in domain '{domain}'. Falling back.",
+                    file=sys.stderr,
+                )
 
-            rank_index_in_gpu_group = local_rank // gpus_per_task
-            return commands.hwloc_calc.get_object_in_set(
-                domain, hwloc_type, rank_index_in_gpu_group
-            )
-        else:
-            raise ValueError(f"Unsupported type '{hwloc_type}' for GPU locality binding.")
+        # Default assignment: Rank's Nth turn for a resource of this type within its GPU group.
+        # This is the correct index for packing sub-objects within a domain.
+        index = local_rank // gpus_per_task if gpus_per_task > 0 else local_rank
+
+        # For certain patterns like interleave or spread, the index calculation
+        # would need to be more complex, but for a simple packed pattern this is the logic.
+        # Let's assume a simple packed logic for now as pattern is not yet implemented here.
+        return commands.hwloc_calc.get_object_in_set(domain, hwloc_type, index)
 
     def get_binding_for_rank(self, rank, node_id, local_rank, gpus_per_task=None) -> str:
         """
