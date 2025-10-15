@@ -135,68 +135,38 @@ class Shape:
         """
         Calculate a 'gpu-local' binding using the topology-aware ordered GPU list.
         """
-        if not self.ordered_gpus:
-            raise RuntimeError("Shape specifies 'bind: gpu-local', but no GPUs were discovered.")
-
-        # Assign a slice of GPUs from the canonical, ordered list.
-        start_idx = local_rank * gpus_per_task
-        end_idx = start_idx + gpus_per_task
-        if end_idx > len(self.ordered_gpus):
-            raise ValueError(f"Not enough total GPUs to satisfy request for rank {local_rank}.")
-
-        assigned_gpu_slice = self.ordered_gpus[start_idx:end_idx]
-        cuda_devices = ",".join([str(start_idx + i) for i, _ in enumerate(assigned_gpu_slice)])
-
+        assignment = gpus.GPUAssignment.for_rank(local_rank, gpus_per_task, self.ordered_gpus)
+        
         # The CPU domain is the union of NUMA nodes for the assigned GPUs.
-        local_numa_indices = sorted(list({gpu["numa_index"] for gpu in assigned_gpu_slice}))
-        domain_locations = [f"numa:{i}" for i in local_numa_indices]
-        domain = " ".join(domain_locations)  # e.g., "numa:0" or "numa:0 numa:1"
-
-        # Get the final CPU binding WITHIN that domain.
+        domain_locations = [f"numa:{i}" for i in assignment.numa_indices]
+        domain = " ".join(domain_locations)
         cpu_binding_string = self.get_binding_in_gpu_domain(rule, local_rank, gpus_per_task, domain)
-        return f"{cpu_binding_string};{cuda_devices}"
-
+        return f"{cpu_binding_string};{assignment.cuda_devices}"
+    
     def get_gpu_remote_binding(self, rule: dict, local_rank: int, gpus_per_task: int) -> str:
         """
         Calculates a 'gpu-remote' binding using the topology-aware ordered GPU list.
         """
         if len(self.numa_node_cpusets) < 2:
             raise RuntimeError("'bind: gpu-remote' is invalid on a single-NUMA system.")
-        if not self.ordered_gpus:
-            raise RuntimeError("Shape specifies 'bind: gpu-remote', but no GPUs were discovered.")
+        assignment = gpus.GPUAssignment.for_rank(local_rank, gpus_per_task, self.ordered_gpus)
 
-        # Assign a slice of GPUs to determine the local NUMA domains.
-        start_idx = local_rank * gpus_per_task
-        end_idx = start_idx + gpus_per_task
-        if end_idx > len(self.ordered_gpus):
-            raise ValueError(f"Not enough total GPUs to satisfy request for rank {local_rank}.")
-
-        assigned_gpu_slice = self.ordered_gpus[start_idx:end_idx]
-        cuda_devices = ",".join([str(start_idx + i) for i, _ in enumerate(assigned_gpu_slice)])
-
-        # Find the set of all local NUMA domains for this rank's GPUs.
-        local_numa_indices = {gpu["numa_index"] for gpu in assigned_gpu_slice}
-
-        # Find all remote NUMA domains.
+        # Find all remote NUMA domains relative to the set of local domains.
         all_numa_indices = set(range(len(self.numa_node_cpusets)))
-        remote_numa_indices = sorted(list(all_numa_indices - local_numa_indices))
-
+        remote_numa_indices = sorted(list(all_numa_indices - assignment.numa_indices))
+        
         if not remote_numa_indices:
-            raise RuntimeError(
-                f"Cannot find a remote NUMA node for rank {local_rank}; its GPUs span all NUMA domains."
-            )
-
-        # 4. Select the target remote domain.
-        offset = rule.get("offset", 0)
+            raise RuntimeError(f"Cannot find a remote NUMA node for rank {local_rank}; its GPUs span all NUMA domains.")
+        
+        offset = rule.get('offset', 0)
         if offset >= len(remote_numa_indices):
             raise ValueError(f"Offset {offset} is out of range for remote NUMA domains.")
-
+            
         target_remote_numa_idx = remote_numa_indices[offset]
         domain = f"numa:{target_remote_numa_idx}"
 
-        # Get the final CPU binding WITHIN that remote domain.
         cpu_binding_string = self.get_binding_in_gpu_domain(rule, local_rank, gpus_per_task, domain)
-        return f"{cpu_binding_string};{cuda_devices}"
+        return f"{cpu_binding_string};{assignment.cuda_devices}"
 
     def get_binding_in_gpu_domain(
         self, rule: dict, local_rank: int, gpus_per_task: int, domain: str
