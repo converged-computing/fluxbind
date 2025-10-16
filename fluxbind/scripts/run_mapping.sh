@@ -21,7 +21,7 @@ if [ -z "$JOB_SHAPE_FILE" ]; then
     exit 1
 fi
 
-gpus_per_task=${GPUS_PER_TASK:-1}
+gpus_per_task=${GPUS_PER_TASK:-0}
 
 # Call the fluxbind helper script to get the target location string (e.g., "core:0" or "UNBOUND")
 # It ALWAYS returns a single line in the format: BIND_LOCATION,CUDA_DEVICE_ID
@@ -42,6 +42,8 @@ CUDA_DEVICES="${BIND_INFO#*;}"
 
 if [[ "$CUDA_DEVICES" != "NONE" ]]; then
     export CUDA_VISIBLE_DEVICES=$CUDA_DEVICES
+    export ROCR_VISIBLE_DEVICES=$CUDA_DEVICES
+    export HIP_VISIBLE_DEVICES=$CUDA_DEVICES
 fi
 
 if [[ "${BIND_LOCATION}" == "UNBOUND" ]]; then

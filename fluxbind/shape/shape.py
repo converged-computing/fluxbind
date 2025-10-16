@@ -19,7 +19,7 @@ class Shape:
         """
         self.machine = machine
         self.machine_cpuset = commands.hwloc_calc.get_cpuset(self.machine)
-        self.data = self.load_file(filepath)
+        self.data = self.load_file(filepath) or []
         # This discovers and cache hardware properties on init
         # The expectation is that this is running from the node (task)
         self.num_cores = commands.hwloc_calc.count("core", within=self.machine)
@@ -74,11 +74,12 @@ class Shape:
 
         return gpus_by_numa
 
-    def load_file(self, filepath):
+    def load_file(self, filepath=None):
         """
         Loads and parses the YAML shape file.
         """
-        return utils.read_yaml(filepath)
+        if filepath is not None:
+            return utils.read_yaml(filepath)
 
     @staticmethod
     def parse_range(range_str: str) -> set:
