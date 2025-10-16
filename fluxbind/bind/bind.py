@@ -187,6 +187,8 @@ class CommandLineRunner:
         """
         Set command flags.
         """
+        # CPU and GPU affinity MUST stay off
+        cmd += ['-o', 'cpu-affinity=off', '-o', 'gpu-affinity=off']
         if self.tasks is not None:
             cmd += ["-n", str(self.tasks)]
         if self.cpu_affinity is not None:
@@ -195,8 +197,6 @@ class CommandLineRunner:
             cmd += ["-o", f"gpu-affinity={self.gpu_affinity}"]
         if self.cores_per_task is not None:
             cmd += ["--cores-per-task", str(self.cores_per_task)]
-        if self.gpus_per_task is not None:
-            cmd += ["--gpus-per-task", str(self.gpus_per_task)]
         if self.tasks_per_core is not None:
             cmd += ["--tasks-per-core", str(self.tasks_per_core)]
         if self.taskmap is not None:

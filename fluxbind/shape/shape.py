@@ -137,13 +137,13 @@ class Shape:
         Calculate a 'gpu-local' binding using the topology-aware ordered GPU list.
         """
         assignment = gpus.GPUAssignment.for_rank(local_rank, gpus_per_task, self.ordered_gpus)
-        
+
         # The CPU domain is the union of NUMA nodes for the assigned GPUs.
         domain_locations = [f"numa:{i}" for i in assignment.numa_indices]
         domain = " ".join(domain_locations)
         cpu_binding_string = self.get_binding_in_gpu_domain(rule, local_rank, gpus_per_task, domain)
         return f"{cpu_binding_string};{assignment.cuda_devices}"
-    
+
     def get_gpu_remote_binding(self, rule: dict, local_rank: int, gpus_per_task: int) -> str:
         """
         Calculates a 'gpu-remote' binding using the topology-aware ordered GPU list.
@@ -155,14 +155,16 @@ class Shape:
         # Find all remote NUMA domains relative to the set of local domains.
         all_numa_indices = set(range(len(self.numa_node_cpusets)))
         remote_numa_indices = sorted(list(all_numa_indices - assignment.numa_indices))
-        
+
         if not remote_numa_indices:
-            raise RuntimeError(f"Cannot find a remote NUMA node for rank {local_rank}; its GPUs span all NUMA domains.")
-        
-        offset = rule.get('offset', 0)
+            raise RuntimeError(
+                f"Cannot find a remote NUMA node for rank {local_rank}; its GPUs span all NUMA domains."
+            )
+
+        offset = rule.get("offset", 0)
         if offset >= len(remote_numa_indices):
             raise ValueError(f"Offset {offset} is out of range for remote NUMA domains.")
-            
+
         target_remote_numa_idx = remote_numa_indices[offset]
         domain = f"numa:{target_remote_numa_idx}"
 
@@ -171,7 +173,7 @@ class Shape:
 
     def get_binding_in_gpu_domain(
         self, rule: dict, local_rank: int, gpus_per_task: int, domain: str
-    ) -> str:
+    ):
         """
         A dedicated binding engine for GPU jobs. It applies user preferences within a calculated domain
         (e.g., "numa:0" or "numa:0 numa:1").
@@ -184,25 +186,58 @@ class Shape:
             # If a broad type is requested, the binding is the domain itself.
             return domain
 
-        if "prefer" in rule:
-            try:
-                requested_index = int(rule["prefer"])
-                # Validate by attempting to get the object.
-                return commands.hwloc_calc.get_object_in_set(domain, hwloc_type, requested_index)
-            except (ValueError, RuntimeError, TypeError):
-                print(
-                    f"Warning: Preferred index '{rule['prefer']}' invalid/not in domain '{domain}'. Falling back.",
-                    file=sys.stderr,
+        elif hwloc_type in ["core", "pu", "l2cache"]:
+
+            # Get the number of objects to select, defaulting to 1.
+            count = rule.get("count", 1)
+
+            all_indices_in_domain = commands.hwloc_calc.get_object_in_set(
+                domain, hwloc_type, "all"
+            ).split(",")
+            if not all_indices_in_domain or not all_indices_in_domain[0]:
+                raise RuntimeError(f"No objects of type '{hwloc_type}' found in domain '{domain}'.")
+
+            if "prefer" in rule:
+                if count > 1:
+                    raise ValueError("'prefer' and 'count > 1' cannot be used together.")
+                try:
+                    requested_index = str(int(rule["prefer"]))
+                    if requested_index in all_indices_in_domain:
+                        return f"{hwloc_type}:{requested_index}"
+                    else:
+                        print(
+                            f"Warning: Preferred index '{requested_index}' not available in domain '{domain}'. Falling back.",
+                            file=sys.stderr,
+                        )
+                except (ValueError, TypeError):
+                    raise ValueError(
+                        f"The 'prefer' key must be a simple integer, but got: {rule['prefer']}"
+                    )
+
+            # Default assignment: Calculate the slice of objects for this rank.
+            # We need to know this rank's turn on the current domain.
+            num_domains = len(domain.split())
+            rank_turn_in_domain = local_rank // num_domains
+
+            start_index = rank_turn_in_domain * count
+            end_index = start_index + count
+
+            if end_index > len(all_indices_in_domain):
+                raise ValueError(
+                    f"Not enough '{hwloc_type}' objects in domain '{domain}' to satisfy request "
+                    f"for {count} objects for rank {local_rank} (needs up to index {end_index-1}, "
+                    f"only {len(all_indices_in_domain)} available)."
                 )
 
-        # Default assignment: Rank's Nth turn for a resource of this type within its GPU group.
-        # This is the correct index for packing sub-objects within a domain.
-        index = local_rank // gpus_per_task if gpus_per_task > 0 else local_rank
+            # Get the slice of object indices.
+            target_indices_slice = all_indices_in_domain[start_index:end_index]
 
-        # For certain patterns like interleave or spread, the index calculation
-        # would need to be more complex, but for a simple packed pattern this is the logic.
-        # Let's assume a simple packed logic for now as pattern is not yet implemented here.
-        return commands.hwloc_calc.get_object_in_set(domain, hwloc_type, index)
+            # Construct a space-separated list of location objects.
+            # e.g., "core:0 core:1 core:2 core:3 core:4 core:5"
+            binding_locations = [f"{hwloc_type}:{i}" for i in target_indices_slice]
+            return " ".join(binding_locations)
+        else:
+            raise ValueError(f"Unsupported type '{hwloc_type}' for GPU binding.")
 
     def get_binding_for_rank(self, rank, node_id, local_rank, gpus_per_task=None) -> str:
         """
