@@ -40,10 +40,15 @@ fi
 BIND_LOCATION="${BIND_INFO%;*}"
 CUDA_DEVICES="${BIND_INFO#*;}"
 
+# check for nvidia-smi vs. rocm-smi command
 if [[ "$CUDA_DEVICES" != "NONE" ]]; then
-    export CUDA_VISIBLE_DEVICES=$CUDA_DEVICES
-    export ROCR_VISIBLE_DEVICES=$CUDA_DEVICES
-    export HIP_VISIBLE_DEVICES=$CUDA_DEVICES
+    if command -v nvidia-smi &> /dev/null && nvidia-smi -L &> /dev/null; then
+        export CUDA_VISIBLE_DEVICES="$CUDA_DEVICES"
+    elif command -v rocm-smi &> /dev/null && rocm-smi &> /dev/null;  then
+        export ROCR_VISIBLE_DEVICES="$CUDA_DEVICES"
+    else
+        echo "Warning: GPU binding requested, but neither nvidia-smi nor rocm-smi found. GPU assignment may not work." >&2
+    fi
 fi
 
 if [[ "${BIND_LOCATION}" == "UNBOUND" ]]; then
@@ -87,8 +92,11 @@ if [[ "$FLUXBIND_QUIET" != "1" ]]
   echo -e "${prefix}: Effective Cpuset Mask:  ${CYAN}$cpuset_mask${RESET}"
   echo -e "${prefix}: Logical CPUs (PUs):     ${BLUE}${logical_cpu_list:-none}${RESET}"
   echo -e "${prefix}: Physical Cores:         ${ORANGE}${physical_core_list:-none}${RESET}"
-  if [[ "$CUDA_DEVICES" != "NONE" ]]; then
-    echo -e "${prefix}: CUDA Devices:           ${YELLOW}${CUDA_DEVICES}${RESET}"
+  if [[ ! -z "$CUDA_VISIBLE_DEVICES" ]]; then
+    echo -e "${prefix}: CUDA Devices:           ${YELLOW}${CUDA_VISIBLE_DEVICES}${RESET}"
+  fi
+  if [[ ! -z "$ROCR_VISIBLE_DEVICES" ]]; then
+    echo -e "${prefix}: ROCR Devices:           ${YELLOW}${ROCR_VISIBLE_DEVICES}${RESET}"
   fi
   echo
 fi
