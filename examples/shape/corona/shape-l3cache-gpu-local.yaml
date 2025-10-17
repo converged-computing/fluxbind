@@ -1,0 +1,5 @@
+# Assigns each rank to its GPU and a dedicated L2 cache (and thus, a dedicated core)
+# within that GPU's local NUMA domain.
+default:
+  type: l3cache
+  bind: gpu-remote

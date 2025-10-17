@@ -182,11 +182,11 @@ class Shape:
         if not hwloc_type:
             raise ValueError("Rule with GPU binding must have a 'type'.")
 
-        if hwloc_type in ["numa", "package", "l3cache", "machine"]:
+        if hwloc_type in ["numa", "package", "machine"]:
             # If a broad type is requested, the binding is the domain itself.
             return domain
 
-        elif hwloc_type in ["core", "pu", "l2cache"]:
+        elif hwloc_type in ["core", "pu", "l2cache", "l3cache"]:
 
             # Get the number of objects to select, defaulting to 1.
             count = rule.get("count", 1)
