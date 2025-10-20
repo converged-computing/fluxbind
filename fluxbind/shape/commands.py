@@ -95,7 +95,7 @@ class HwlocCalcCommand(Command):
         """
         list_cmd = f"{self.name} '{cpuset}' --intersect {obj_type}"
         all_indices_str = self.run(list_cmd, shell=True)
-        
+
         # Special case asking for all.
         if index == "all":
             return all_indices_str

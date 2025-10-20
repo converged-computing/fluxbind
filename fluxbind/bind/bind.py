@@ -188,7 +188,7 @@ class CommandLineRunner:
         Set command flags.
         """
         # CPU and GPU affinity MUST stay off
-        cmd += ['-o', 'cpu-affinity=off', '-o', 'gpu-affinity=off']
+        cmd += ["-o", "cpu-affinity=off", "-o", "gpu-affinity=off"]
         if self.tasks is not None:
             cmd += ["-n", str(self.tasks)]
         if self.cpu_affinity is not None:
@@ -266,6 +266,8 @@ class CommandLineRunner:
             cmd += self.command
         print(f"Executing: {shlex.join(cmd)}")
 
+        # Get rid of separator
+        cmd = [x for x in cmd if x != "--"]
         try:
             return_code, raw_output = stream(cmd)
         except Exception as e:
