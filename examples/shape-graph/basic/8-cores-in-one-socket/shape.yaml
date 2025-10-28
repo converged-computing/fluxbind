@@ -1,0 +1,9 @@
+# Basic containment: Allocate 8 cores, but ensure they all
+# come from the same single socket (Package).
+# This will fail on a machine where no single socket has 8 cores.
+resources:
+  - type: socket
+    count: 1
+    with:
+      - type: core
+        count: 8

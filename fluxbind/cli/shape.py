@@ -1,11 +1,15 @@
 from fluxbind.shape import Shape
+from fluxbind.graph import Shape as GraphShape
 
 
 def main(args, extra, **kwargs):
     """
     Parse a shape file to return the binding for a specific rank (local)
     """
-    shape = Shape(args.file)
+    if args.graph:
+        shape = GraphShape(args.file)
+    else:
+        shape = Shape(args.file)
 
     # 2. Call the public method to get the final binding string
     binding_string = shape.get_binding_for_rank(

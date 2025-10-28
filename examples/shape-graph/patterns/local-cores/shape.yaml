@@ -1,0 +1,10 @@
+# Test local pattern (smart packing).
+# Requests 4 cores within a single socket, packed into the fewest
+# number of L3 caches possible.
+resources:
+  - type: socket
+    count: 1
+    with:
+      - type: core
+        count: 4
+        pattern: local

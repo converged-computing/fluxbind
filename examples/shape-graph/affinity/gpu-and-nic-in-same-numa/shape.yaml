@@ -1,0 +1,12 @@
+# Find a NUMA node that contains a NIC, and then find a GPU
+# that is also under that *same* NUMA node. 
+resources:
+  - type: numanode
+    count: 1
+    with:
+      # This NUMA node MUST contain at least one NIC
+      - type: nic
+        count: 1
+      # It also MUST contain at least one GPU
+      - type: gpu
+        count: 1

@@ -140,6 +140,15 @@ def get_parser():
         "--gpus-per-task", dest="gpus_per_task", type=int, help="Number of GPUs per task."
     )
 
+    for command in [run, shape]:
+        command.add_argument(
+          "--graph",
+          type=bool,
+          default=False,
+          action="store_true",
+          help="Use the graph hwloc parser instead",
+      )
+
     for command in [predict, run]:
         command.add_argument(
             "--xml",

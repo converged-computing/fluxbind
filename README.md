@@ -75,6 +75,7 @@ fluxbind predict core:0-7
 fluxbind predict --xml ./examples/topology/corona.xml numa:0,1 x core:0-2
 ```
 
+
 ## License
 
 DevTools is distributed under the terms of the MIT license.

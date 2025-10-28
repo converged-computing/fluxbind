@@ -1,6 +1,5 @@
 import json
 import subprocess
-import sys
 
 
 class Command:

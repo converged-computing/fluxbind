@@ -1,0 +1,12 @@
+# Find the 4 cores that are physically closest to the NIC
+resources:
+  - type: machine
+    count: 1
+    with:
+      - type: core
+        count: 4
+        # Sort all available cores by distance to the NIC...
+        affinity:
+          type: nic
+        # ...then take the first 4 (the closest ones).
+        pattern: packed

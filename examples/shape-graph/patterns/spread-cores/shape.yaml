@@ -1,0 +1,10 @@
+# Requests 4 cores within a single socket, but spread across the
+# underlying physical containers (L3 caches)
+# The result should be cores from different L3 caches.
+resources:
+  - type: socket
+    count: 1
+    with:
+      - type: core
+        count: 4
+        pattern: spread

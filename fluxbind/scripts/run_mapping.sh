@@ -21,13 +21,19 @@ if [ -z "$JOB_SHAPE_FILE" ]; then
     exit 1
 fi
 
+# If we want to use the graph parser
+grapharg=""
+if [ ! -z "$JOB_GRAPH" ]; then
+    grapharg="--graph"
+fi
+
 gpus_per_task=${GPUS_PER_TASK:-0}
 
 # Call the fluxbind helper script to get the target location string (e.g., "core:0" or "UNBOUND")
 # It ALWAYS returns a single line in the format: BIND_LOCATION,CUDA_DEVICE_ID
 # For CPU jobs, CUDA_DEVICE_ID will be the string "NONE".
-echo fluxbind shape --file "$JOB_SHAPE_FILE" --rank "$rank" --node-id "$node_id" --local-rank "$local_rank" --gpus-per-task "$gpus_per_task"
-BIND_INFO=$(fluxbind shape --file "$JOB_SHAPE_FILE" --rank "$rank" --node-id "$node_id" --local-rank "$local_rank" --gpus-per-task "$gpus_per_task")
+echo fluxbind shape --file "$JOB_SHAPE_FILE" --rank "$rank" --node-id "$node_id" --local-rank "$local_rank" --gpus-per-task "$gpus_per_task $grapharg"
+BIND_INFO=$(fluxbind shape --file "$JOB_SHAPE_FILE" --rank "$rank" --node-id "$node_id" --local-rank "$local_rank" --gpus-per-task "$gpus_per_task" $grapharg)
 echo
 
 # Exit if the helper script failed
