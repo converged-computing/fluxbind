@@ -113,6 +113,7 @@ class CommandLineRunner:
             "cpu_affinity",
             "taskmap",
             "command",
+            "graph",
             "shape",
             "env",
             "quiet",
@@ -222,6 +223,8 @@ class CommandLineRunner:
         if self.env is not None:
             for envar in self.env:
                 cmd += ["--env", envar]
+        if self.graph:
+            cmd += ["--env", "FLUXBIND_GRAPH=1"]
         return cmd
 
     def get_shape_command(self):

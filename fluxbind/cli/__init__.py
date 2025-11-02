@@ -30,13 +30,6 @@ def get_parser():
     )
 
     parser.add_argument(
-        "--quiet",
-        dest="quiet",
-        help="suppress additional output.",
-        default=False,
-        action="store_true",
-    )
-    parser.add_argument(
         "--version",
         dest="version",
         help="show software version.",
@@ -137,26 +130,33 @@ def get_parser():
         "--local-rank", required=True, type=int, help="Rank of the process on the local node."
     )
     shape.add_argument(
+        "--local-size", required=True, type=int, help="Local size (tasks on the node)."
+    )
+    shape.add_argument(
         "--gpus-per-task", dest="gpus_per_task", type=int, help="Number of GPUs per task."
     )
-
     for command in [run, shape]:
         command.add_argument(
-          "--graph",
-          type=bool,
-          default=False,
-          action="store_true",
-          help="Use the graph hwloc parser instead",
-      )
+            "--graph",
+            default=False,
+            action="store_true",
+            help="Use the graph hwloc parser instead",
+        )
+        command.add_argument(
+            "--quiet",
+            dest="quiet",
+            help="suppress additional output.",
+            default=False,
+            action="store_true",
+        )
 
-    for command in [predict, run]:
+    for command in [predict, run, shape]:
         command.add_argument(
             "--xml",
             "--topology-file",
             dest="topology_file",
             help="Path to a lstopo XML file.\nIf not provided, runs 'lstopo' do detect.",
         )
-
     return parser
 
 

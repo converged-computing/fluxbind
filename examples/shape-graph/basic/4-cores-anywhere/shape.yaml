@@ -1,8 +1,0 @@
-# Simplest possible test: Allocate 4 cores anywhere on the node.
-# The allocator should succeed on almost any machine.
-resources:
-  - type: machine
-    count: 1
-    with:
-      - type: core
-        count: 4

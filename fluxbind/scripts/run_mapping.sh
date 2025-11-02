@@ -11,9 +11,17 @@ fi
 rank=${FLUX_TASK_RANK:-0}
 local_rank=${FLUX_TASK_LOCAL_ID:-0}
 node=$(hostname)
+total_ranks=${FLUX_JOB_SIZE:-1}
+total_nodes=${FLUX_JOB_NNODES:-1}
 
 # Get the logical node id using the arithmetic approach
 node_id=$(flux job taskmap --nodeid=${rank} ${FLUX_JOB_ID})
+local_size=$(flux job taskmap --ntasks=${node_id} ${FLUX_JOB_ID})
+
+if [ -z "$rank" ] || [ -z "$local_rank" ] || [ -z "$node_id" ]; then
+    echo "Error: Required job task environment variables are not set." >&2
+    exit 1
+fi
 
 # The user provides the path to the shape file in the environment.
 if [ -z "$JOB_SHAPE_FILE" ]; then
@@ -23,7 +31,7 @@ fi
 
 # If we want to use the graph parser
 grapharg=""
-if [ ! -z "$JOB_GRAPH" ]; then
+if [ ! -z "$FLUXBIND_GRAPH" ]; then
     grapharg="--graph"
 fi
 
@@ -32,8 +40,14 @@ gpus_per_task=${GPUS_PER_TASK:-0}
 # Call the fluxbind helper script to get the target location string (e.g., "core:0" or "UNBOUND")
 # It ALWAYS returns a single line in the format: BIND_LOCATION,CUDA_DEVICE_ID
 # For CPU jobs, CUDA_DEVICE_ID will be the string "NONE".
-echo fluxbind shape --file "$JOB_SHAPE_FILE" --rank "$rank" --node-id "$node_id" --local-rank "$local_rank" --gpus-per-task "$gpus_per_task $grapharg"
-BIND_INFO=$(fluxbind shape --file "$JOB_SHAPE_FILE" --rank "$rank" --node-id "$node_id" --local-rank "$local_rank" --gpus-per-task "$gpus_per_task" $grapharg)
+echo "Executing: fluxbind shape --file \"$JOB_SHAPE_FILE\" --rank \"$rank\" --node-id \"$node_id\" --local-rank \"$local_rank\" --local-size \"$local_size\" --gpus-per-task \"$gpus_per_task\" $grapharg"
+BIND_INFO=$(fluxbind shape --file "$JOB_SHAPE_FILE" \
+                            --rank "$rank" \
+                            --node-id "$node_id" \
+                            --local-rank "$local_rank" \
+                            --local-size "$local_size" \
+                            --nodes "$total_nodes" \
+                            --gpus-per-task "$gpus_per_task" $grapharg)
 echo
 
 # Exit if the helper script failed

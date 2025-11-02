@@ -6,6 +6,29 @@
 
 ![img/fluxbind.png](img/fluxbind-small.png)
 
+## How does this work?
+
+OK I think I know what we might do. The top level description for a job resources is the jobspec "job specification" that might look like this:
+
+```yaml
+resources:
+- type: slot
+  count: 4
+  with:
+  - type: core
+    count: 8
+```
+
+Flux run / submit is going to use flux-sched (or a scheduler) to assign jobs to nodes and to go into the flux exec shell and execute some number of tasks per node. Each of those tasks is what is going to hit and then execute our bash script, with a view of the entire node, and with need to run fluxbind shape to derive the binding for the task. We can technically derive a shapefile from a jobspec. It is the same, but only needs to describe the shape of one slot, for which the task that receives it is responsible for some N. So a shapefile that describes the shape of a slot looks like this:
+
+```yaml
+resources:
+- type: core
+  count: 8
+```
+
+And then that is to say "On this node, we are breaking resources down into this slot shape." We calculate the number of slots that the task is handling based on `FLUX_` environment variables. For now this is assume exclusive resources per node so if we are slightly off its not a huge deal, but in the future (given a slice of a node for a slot) we will need to be right, because we might see an entire node with hwloc but already be in a cpuset. Right now I'm also assuming the `fluxbind run` matches the topology of the shapefile. If you do something that doesn't match it probably can't be satisfied and will get an error, but not guaranteed.
+
 ## Run
 
 Use fluxbind to run a job binding to specific cores. For flux, this means we require exclusive, and then for each node customize the binding exactly as we want it. We do this via a shape file.
@@ -14,11 +37,15 @@ Use fluxbind to run a job binding to specific cores. For flux, this means we req
 ### Basic Examples
 
 ```bash
-# Start with a first match policy
+# Start with a first match policy (I think this just works one node)
 flux start --config ./examples/config/match-first.toml
 
+# This works >1 node
+flux alloc --conf ./examples/config/match-first.toml
+
 # 1. Bind each task to a unique physical core, starting from core:0 (common case)
-fluxbind run -n 8 --quiet --shape ./examples/shape/1node/packed-cores-shapefile.yaml sleep 1
+# STOPPED HERE - get this working with run! I don't think --graph is being passed.
+fluxbind run -n 8 --quiet --shape ./examples/shape-graph/single-node/simple_cores/shape.yaml --graph sleep 1
 
 # 2. Reverse it!
 fluxbind run -n 8 --quiet --shape ./examples/shape/1node/packed-cores-reversed-shapefile.yaml sleep 1
@@ -59,6 +86,14 @@ fluxbind run -N 1 --tasks-per-core 2 --shape ./examples/shape/kripke/packed-pus-
 
 # 4. Hybrid model: launch just two MPI ranks and give each one a whole L3 cache domain to work with (1.966967e-08)
 fluxbind run -N 1 -n 2 --env OMP_NUM_THREADS=4 --env OMP_PLACES=cores --shape ./examples/shape/kripke/hybrid-l3-shapefile.yaml kripke --zones 16,16,16 --niter 500 --procs 2,1,1 --layout GZD
+```
+
+## Shape
+
+The run command generates a shape, and we can test the shape command without it to provide a shapefile (basically, a modified jobspec with a pattern and optional affinity). Currently, the basic shape works as expected, but we are trying to work on the `--graph` implementation (uses a Flux jobspec and builds into a graph of nodes).
+
+```bash
+fluxbind shape --file examples/shape-graph/basic/4-cores-anywhere/shape.yaml --rank 0 --node-id 1 --local-rank 0 --gpus-per-task 0 --graph --global-ranks $(nproc) --nodes 1
 ```
 
 

@@ -239,7 +239,7 @@ class Shape:
         else:
             raise ValueError(f"Unsupported type '{hwloc_type}' for GPU binding.")
 
-    def get_binding_for_rank(self, rank, node_id, local_rank, gpus_per_task=None) -> str:
+    def get_binding_for_rank(self, rank, node_id, local_rank, gpus_per_task=None, **kwargs) -> str:
         """
         The main method to get the final hwloc binding string for a process.
 

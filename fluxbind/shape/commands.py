@@ -24,6 +24,13 @@ class Command:
             raise RuntimeError(f"Command not found: '{cmd_str}'") from e
 
 
+class LstopoCommand(Command):
+    name = "lstopo"
+
+    def get_xml(self):
+        return self.run(f"{self.name} -p --output-format xml", shell=True)
+
+
 class HwlocCalcCommand(Command):
     name = "hwloc-calc"
 
@@ -163,3 +170,4 @@ class RocmSmiCommand(Command):
 hwloc_calc = HwlocCalcCommand()
 nvidia_smi = NvidiaSmiCommand()
 rocm_smi = RocmSmiCommand()
+lstopo = LstopoCommand()
