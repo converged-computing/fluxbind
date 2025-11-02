@@ -79,7 +79,6 @@ class TopologyVisualizer:
             if data.get("type") not in ["Core", "PU"]
         ]
         final_subgraph.remove_nodes_from(nodes_to_remove)
-
         return final_subgraph
 
     def draw(self, filename: str):

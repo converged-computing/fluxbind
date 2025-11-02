@@ -226,6 +226,52 @@ resources:
         self.assertEqual(result_rank1.mask, "0x00000050")
         self.assertEqual(len(result_rank1.nodes), 2)
 
+    def test_09_explicit_bind_pu_reverse_multi_rank(self):
+        """
+        Test: Ask for 4 cores, bind to PUs in REVERSE, divide among 2 ranks.
+        This validates the `reverse: true` modifier with `bind: pu`.
+        """
+        print("\n--- Testing: Explicit `bind: pu` with `reverse: true` (Multi-Rank) ---")
+        shape_yaml = """
+options:
+  bind: pu
+resources:
+  - type: core
+    count: 4
+    reverse: true
+"""
+        # The total pool of resources will be all PUs on the first 4 cores,
+        # but the list will be reversed.
+        # Initial PUs: [PU0, PU1, PU2, PU3, PU4, PU5, PU6, PU7]
+        # Reversed PUs: [PU7, PU6, PU5, PU4, PU3, PU2, PU1, PU0]
+        # local_size = 2, so items_per_rank = 8 // 2 = 4.
+
+        # We expect this rank to get the first 4 PUs from the REVERSED list:
+        # PUs 7, 6, 5, 4.
+        # The mask for these is 0x80 | 0x40 | 0x20 | 0x10 = 0xF0
+        result_rank0 = self.run_test_case(
+            shape_yaml,
+            local_rank=0,
+            local_size=2,
+            output_filename="09_explicit_pu_reverse_rank0.png",
+            title="Explicit PU Binding, Reversed: Rank 0 of 2",
+        )
+        self.assertEqual(result_rank0.mask, "0x000000f0")
+        self.assertEqual(len(result_rank0.nodes), 4)
+
+        # We expect this rank to get the next 4 PUs from the REVERSED list:
+        # PUs 3, 2, 1, 0.
+        # The mask for these is 0x8 | 0x4 | 0x2 | 0x1 = 0xF
+        result_rank1 = self.run_test_case(
+            shape_yaml,
+            local_rank=1,
+            local_size=2,
+            output_filename="09_explicit_pu_reverse_rank1.png",
+            title="Explicit PU Binding, Reversed: Rank 1 of 2",
+        )
+        self.assertEqual(result_rank1.mask, "0x0000000f")
+        self.assertEqual(len(result_rank1.nodes), 4)
+
 
 @unittest.skipUnless(
     os.path.exists(TEST_GPU_XML_FILE), f"Skipping GPU tests, {TEST_GPU_XML_FILE} not found."
