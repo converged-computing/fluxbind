@@ -31,6 +31,8 @@ class HwlocTopology:
         Load the graph, including distances, and pre-calculate
         entire set of affinities for objects.
         """
+        self.last_affinity_target = None
+
         # If we don't have an xml file, derive from system
         if not xml_input:
             xml_input = commands.lstopo.get_xml()
@@ -558,7 +560,11 @@ class HwlocTopology:
         ]
 
     def get_ancestor_of_type(self, start_node_gp, ancestor_type):
+        """
+        Given a starting node, return all ancestors of a certain type
+        """
         current_gp = start_node_gp
+
         # Walk up the hierarchy tree one parent at a time.
         while current_gp in self.hierarchy_view:
             # Get the parent (should only be one in a tree)
@@ -573,6 +579,9 @@ class HwlocTopology:
         return None
 
     def get_sort_key_for_node(self, leaf_node):
+        """
+        Return tuple sorting key e.g., (0, package_id, core_id) -> e.g., (0, 0, 5)
+        """
         gp, data = leaf_node
 
         # TYPE_ORDER: CPU types < PCI types < Other OS types < Nameless types
@@ -582,8 +591,6 @@ class HwlocTopology:
         if data.get("type") in ["Core", "PU"]:
             package = self.get_ancestor_of_type(gp, "Package")
             package_idx = package[1].get("os_index", -1) if package else -1
-
-            # Returns (0, package_id, core_id) -> e.g., (0, 0, 5)
             return (0, int(package_idx), int(data.get("os_index", -1)))
 
         # Handle PCI devices (GPUs, NICs)

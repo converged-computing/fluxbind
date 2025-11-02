@@ -102,7 +102,7 @@ class Shape:
 
         if graphic and mapping.nodes:
             visualizer = TopologyVisualizer(
-                mapping.topo, mapping.nodes, affinity_target=self.last_affinity_target
+                mapping.topo, mapping.nodes, affinity_target=mapping.topo.last_affinity_target
             )
             visualizer.draw(graphic)
 
@@ -158,6 +158,7 @@ class Shape:
             A tuple containing the GPUAssignment object and a set of graph pointers
             to the Package(s) that should be used for the CPU search.
         """
+        gpus_per_task = gpus_per_task or 0
         if gpus_per_task <= 0:
             raise ValueError(f"'bind: {bind_mode}' requires --gpus-per-task to be > 0.")
 
