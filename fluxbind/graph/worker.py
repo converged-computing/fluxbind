@@ -10,7 +10,12 @@ def get_numa_affinity(gp_index, data):
     """
     Worker function to get NUMA affinity for an object of interest.
     E.g., the data is from hwloc. It will have a type and/or pci_busis.
-    If it has a type, we can use the os_index to get distance.
+    If it has a type, we can use the os_index to get distance. Note that
+    this is functionally and numerically correct, but in practice we can
+    sometimes see that a Core is reported closer to ANOTHER NUMA node. This
+    becomes a choice of predictibility (trust the hardware layout, the hwloc
+    xml) vs. peak performance (trust the output of hwloc calc). I think
+    for a tool like this we need to trust predictibility.
     """
     hwloc_obj_str = ""
     if data.get("type") in ["Core", "PU", "NUMANode"] and "os_index" in data:

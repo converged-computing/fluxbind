@@ -30,6 +30,8 @@ class Shape:
     model, where a total set of resources on a node is divided among the
     local tasks.
     """
+    valid_bind_modes = ["core", "pu", "process", "none", "gpu-local", "gpu-remote"]
+    bind_default = "core"
 
     def __init__(self, jobspec, debug=False):
         """
@@ -38,6 +40,7 @@ class Shape:
         self._setup_logging(debug)
         self.load(jobspec)
         self.hwloc_calc = commands.HwlocCalcCommand()
+        self.set_bind_preference()
 
     def load(self, jobspec):
         """
@@ -48,30 +51,26 @@ class Shape:
         else:
             self.jobspec = utils.read_yaml(jobspec)
 
-    @property
-    def bind_preference(self):
+    def set_bind_preference(self):
         """
         Get the binding preference.
         """
-        # Rule 1 (pre-check): Parse the explicit user override for binding.
         options = self.jobspec.get("options", {})
-        bind_preference = options.get("bind", None)
-        if not bind_preference:
-            return
-
-        # Map the preference to pu if they provided process
-        bind_preference = bind_preference.lower()
-        if bind_preference == "process":
-            bind_preference = "pu"
-
-        valid_options = ["core", "pu", "none"]
-        if bind_preference not in valid_options:
-            raise ValueError(
-                f"Invalid 'bind' option in shapefile: '{self.bind_preference}'. Must be one of {valid_options}."
-            )
-        return bind_preference
+        bind_mode = options.get("bind")
+        if bind_mode:
+            bind_mode = bind_mode.lower()
+            if bind_mode not in self.valid_bind_modes:
+                raise ValueError(
+                    f"Invalid 'bind' option: {bind_mode}. Must be one of {self.valid_bind_modes}."
+                )
+            if bind_mode == "process":
+                bind_mode = "pu"
+        self.bind_mode = bind_mode
 
     def _setup_logging(self, debug=False):
+        """
+        Setup logging, honoring debug if user provides from client.
+        """
         logging.basicConfig(
             level=logging.DEBUG if debug else logging.INFO,
             format="[%(levelname)s] %(message)s",
@@ -91,6 +90,7 @@ class Shape:
         """
         Main entrypoint. Calculates a binding for a rank given the job geometry.
         Unused arguments like 'node_id' are captured by kwargs and discarded.
+        TODO: we should make everything lower() from the getgo.
         """
         log.info(
             f"Processing request for global_rank={rank}, with local_rank={local_rank} of {local_size}"
@@ -123,30 +123,24 @@ class Shape:
           3. A default of core for HPC.
         """
         # See https://gist.github.com/vsoch/be2d1ec712e33ec157bab2dc9a36b10a
-        bind_level = self.bind_preference
+        # User explicit preference takes priority. We check here because the gpu-* types
+        # cannot trigger here.
+        if self.bind_mode in ['core', 'pu', 'none']:
+            log.info(f"Using explicit binding preference from shapefile options: '{self.bind_mode}'.")
+            return self.bind_mode
 
-        # No explicit preference (first priority)
-        if bind_level is None:
-
-            # If the most granular type is PU or CPU, assume that is the preference
-            most_granular_type = (
-                max(total_allocation, key=lambda item: item[1].get("depth", -1))[1]
-                .get("type")
-                .lower()
-            )
+        # Try to infer implicit intent
+        if total_allocation:
+            most_granular_type = max(total_allocation, key=lambda item: item[1].get("depth", -1))[1].get("type").lower()
             if most_granular_type in ["core", "pu"]:
-                bind_level = most_granular_type
-                log.info(f"Using implicit binding preference from resource request: '{bind_level}.")
+                log.info(f"Using implicit binding preference from resource request: '{most_granular_type}'.")
+                return most_granular_type
 
-        # Otherwise, fall back to what we expect HPC to want, Core.
-        if bind_level is None:
-            bind_level = "core"
-            log.info(f"No explicit or implicit preference. Using safe HPC default: '{bind_level}'.")
+        # Fall back to a safe default for HPC.
+        log.info("No explicit or implicit preference. Using safe HPC default: 'core'.")
+        return self.bind_default
 
-        # Note that bind_level can also be none (unbound)
-        return bind_level
-
-    def get_gpu_binding(self, topology, local_rank, gpus_per_task, bind_mode):
+    def get_gpu_binding(self, topology, local_rank, gpus_per_task):
         """
         Handles GPU-specific binding logic.
 
@@ -160,13 +154,13 @@ class Shape:
         """
         gpus_per_task = gpus_per_task or 0
         if gpus_per_task <= 0:
-            raise ValueError(f"'bind: {bind_mode}' requires --gpus-per-task to be > 0.")
+            raise ValueError(f"'bind: {self.bind_mode}' requires --gpus-per-task to be > 0.")
 
         # This uses the dataclass you provided to get our rank's slice of GPUs.
         gpu_assignment = GPUAssignment.for_rank(local_rank, gpus_per_task, topology.ordered_gpus)
 
         # Determine the target NUMA domains based on the bind mode.
-        if bind_mode == "gpu-local":
+        if self.bind_mode == "gpu-local":
             log.info(
                 f"Binding to CPUs local to assigned GPUs (NUMA domains: {list(gpu_assignment.numa_indices)})."
             )
@@ -174,7 +168,7 @@ class Shape:
 
         else:  # gpu-remote
             all_numa_indices = {
-                data.get("os_index") for _, data in topology.find_objects(type="numanode")
+                data.get("os_index") for _, data in topology.find_objects(type="NUMANode")
             }
             remote_numa_indices = all_numa_indices - gpu_assignment.numa_indices
 
@@ -192,7 +186,7 @@ class Shape:
         # Find the graph pointers for the NUMA objects corresponding to our target indices.
         domain_numa_gps = {
             gp
-            for gp, data in topology.find_objects(type="numanode")
+            for gp, data in topology.find_objects(type="NUMANode")
             if data.get("os_index") in target_numa_indices
         }
 
@@ -213,19 +207,14 @@ class Shape:
         Finds a binding by applying the hierarchy of rules to the shapefile and topology.
         """
         topology = HwlocTopology(xml_file)
-        options = self.jobspec.get("options", {})
-        bind_mode = options.get("bind", None)
-
         gpu_assignment = None
         total_allocation = None
 
         # Determine the set of resources we need to find CPUs in.
-        if bind_mode in ["gpu-local", "gpu-remote"]:
+        if self.bind_mode in ["gpu-local", "gpu-remote"]:
             # If it's a GPU-driven binding, call the helper to get the GPU assignment
             # and the correct CPU search domain.
-            gpu_assignment, cpu_domain_gps = self.get_gpu_binding(
-                topology, local_rank, gpus_per_task, bind_mode
-            )
+            gpu_assignment, cpu_domain_gps = self.get_gpu_binding(topology, local_rank, gpus_per_task)
             # The allocation for the CPU search is now the set of packages determined by the helper.
             total_allocation = [(gp, topology.graph.nodes[gp]) for gp in cpu_domain_gps]
         else:
@@ -233,7 +222,11 @@ class Shape:
             log.info(f"Finding the total resource pool for all {local_size} ranks on this node...")
             total_allocation = topology.match_resources(self.jobspec)
 
+        if total_allocation is None:
+             raise RuntimeError("Failed to find any resources on the node that match the requested shape.")
+
         # Honor a user request for binding level or use a default
+        # With devices, we already selected them here, and we are now focused on bindable resources
         bind_level = self.get_bind_type(total_allocation)
 
         # Special case of no binding, but we likely want affinity to devices, etc.
@@ -254,23 +247,8 @@ class Shape:
                 gpu_string=gpu_assignment.cuda_devices if gpu_assignment else "NONE",
             )
 
-        log.info(f"Deriving bindable resources with final preference: '{bind_level}'.")
-        leaf_nodes = []
-        explicit_nodes = [
-            node for node in total_allocation if node[1].get("type").lower() == bind_level
-        ]
-        if len(explicit_nodes) == len(total_allocation):
-            leaf_nodes = total_allocation
-        else:
-            for container_gp, _ in total_allocation:
-                descendants = topology.get_descendants(
-                    container_gp, type=topology.translate_type(bind_level)
-                )
-                leaf_nodes.extend(descendants)
-
-        leaf_nodes = list({gp: (gp, data) for gp, data in leaf_nodes}.values())
-        leaf_nodes.sort(key=topology.get_sort_key_for_node)
-
+        log.info(f"Deriving bindable resources with final preference: '{bind_level}'.")        
+        leaf_nodes = topology.find_bindable_leaves(total_allocation, bind_level)
         if not leaf_nodes:
             raise RuntimeError(
                 f"Could not find any bindable resources of type '{bind_level}' for the allocation."

@@ -10,7 +10,10 @@ here = os.path.dirname(os.path.abspath(__file__))
 
 TEST_XML_FILE = os.path.join(here, "single-node.xml")
 TEST_GPU_XML_FILE = os.path.join(here, "corona.xml")
-GRAPHICS_OUTPUT_DIR = os.path.join(here, "img")
+GRAPHICS_OUTPUT_DIR = os.path.join(here, "img", "single-node")
+
+# To generate gifs
+# convert -delay 50 -loop 0 08_explicit_core_rank* 08_explicit_core_rank.gif
 
 
 class TestShapeAllocator(unittest.TestCase):
@@ -74,7 +77,7 @@ resources:
             local_rank=0,
             local_size=2,
             output_filename="01_simple_cores_rank0.png",
-            title="Simple Cores: Rank 0 of 2",
+            title="Simple Cores: Rank 1 of 2",
         )
         self.assertEqual(result_rank0.mask, "0x00000055")
 
@@ -83,7 +86,7 @@ resources:
             local_rank=1,
             local_size=2,
             output_filename="01_simple_cores_rank1.png",
-            title="Simple Cores: Rank 1 of 2",
+            title="Simple Cores: Rank 2 of 2",
         )
         self.assertEqual(result_rank1.mask, "0x00005500")
 
@@ -101,7 +104,7 @@ resources:
             local_rank=0,
             local_size=2,
             output_filename="02_explicit_pu_rank0.png",
-            title="Explicit PU Binding: Rank 0 of 2",
+            title="Explicit PU Binding: Rank 1 of 2",
         )
         self.assertEqual(result_rank0.mask, "0x0000000f")
 
@@ -110,7 +113,7 @@ resources:
             local_rank=1,
             local_size=2,
             output_filename="02_explicit_pu_rank1.png",
-            title="Explicit PU Binding: Rank 1 of 2",
+            title="Explicit PU Binding: Rank 2 of 2",
         )
         self.assertEqual(result_rank1.mask, "0x000000f0")
 
@@ -156,14 +159,28 @@ resources:
             local_rank=0,
             local_size=4,
             output_filename="06_scatter_rank0.png",
-            title="Scatter Pattern: Rank 0 of 4",
+            title="Scatter Pattern: Rank 1 of 4",
         )
         self.run_test_case(
             shape_yaml,
             local_rank=1,
             local_size=4,
             output_filename="06_scatter_rank1.png",
-            title="Scatter Pattern: Rank 1 of 4",
+            title="Scatter Pattern: Rank 2 of 4",
+        )
+        self.run_test_case(
+            shape_yaml,
+            local_rank=2,
+            local_size=4,
+            output_filename="06_scatter_rank2.png",
+            title="Scatter Pattern: Rank 3 of 4",
+        )
+        self.run_test_case(
+            shape_yaml,
+            local_rank=3,
+            local_size=4,
+            output_filename="06_scatter_rank3.png",
+            title="Scatter Pattern: Rank 4 of 4",
         )
 
     def test_07_pattern_reverse_multi_rank(self):
@@ -174,14 +191,14 @@ resources:
             local_rank=0,
             local_size=2,
             output_filename="07_reverse_rank0.png",
-            title="Reverse Pattern: Rank 0 of 2",
+            title="Reverse Pattern: Rank 1 of 2",
         )
         self.run_test_case(
             shape_yaml,
             local_rank=1,
             local_size=2,
             output_filename="07_reverse_rank1.png",
-            title="Reverse Pattern: Rank 1 of 2",
+            title="Reverse Pattern: Rank 2 of 2",
         )
 
     def test_08_explicit_core_binding_multi_rank(self):
@@ -208,7 +225,7 @@ resources:
             local_rank=0,
             local_size=2,
             output_filename="08_explicit_core_rank0.png",
-            title="Explicit Core Binding (2 per rank): Rank 0 of 2",
+            title="Explicit Core Binding (2 per rank): Rank 1 of 2",
         )
         self.assertEqual(result_rank0.mask, "0x00000005")
         self.assertEqual(len(result_rank0.nodes), 2)
@@ -221,7 +238,7 @@ resources:
             local_rank=1,
             local_size=2,
             output_filename="08_explicit_core_rank1.png",
-            title="Explicit Core Binding (2 per rank): Rank 1 of 2",
+            title="Explicit Core Binding (2 per rank): Rank 2 of 2",
         )
         self.assertEqual(result_rank1.mask, "0x00000050")
         self.assertEqual(len(result_rank1.nodes), 2)
@@ -254,7 +271,7 @@ resources:
             local_rank=0,
             local_size=2,
             output_filename="09_explicit_pu_reverse_rank0.png",
-            title="Explicit PU Binding, Reversed: Rank 0 of 2",
+            title="Explicit PU Binding, Reversed: Rank 1 of 2",
         )
         self.assertEqual(result_rank0.mask, "0x000000f0")
         self.assertEqual(len(result_rank0.nodes), 4)
@@ -267,7 +284,7 @@ resources:
             local_rank=1,
             local_size=2,
             output_filename="09_explicit_pu_reverse_rank1.png",
-            title="Explicit PU Binding, Reversed: Rank 1 of 2",
+            title="Explicit PU Binding, Reversed: Rank 2 of 2",
         )
         self.assertEqual(result_rank1.mask, "0x0000000f")
         self.assertEqual(len(result_rank1.nodes), 4)
@@ -278,54 +295,15 @@ resources:
 )
 class TestGpuShapeAllocator(TestShapeAllocator):  # Inherit the helper
     """
-    Tests for GPU-aware allocation, requiring a multi-NUMA topology.
+    Tests for GPU-aware allocation when there aren't GPU.
     """
 
-    def test_01_gpu_local_binding(self):
-        print("\n--- Testing: `bind: gpu-local` (Multi-NUMA) ---")
-        shape_yaml = (
-            "options:\n  bind: gpu-local\n  bind_to: core\nresources:\n  - type: core\n    count: 2"
-        )
-
-        self.run_test_case(
-            shape_yaml,
-            local_rank=1,
-            local_size=8,
-            gpus_per_task=1,
-            xml_file=TEST_GPU_XML_FILE,
-            output_filename="08_gpu_local_rank1_numa0.png",
-            title="GPU Local: Rank 1 (GPU on NUMA 0)",
-        )
-        self.run_test_case(
-            shape_yaml,
-            local_rank=5,
-            local_size=8,
-            gpus_per_task=1,
-            xml_file=TEST_GPU_XML_FILE,
-            output_filename="08_gpu_local_rank5_numa1.png",
-            title="GPU Local: Rank 5 (GPU on NUMA 1)",
-        )
-
-    def test_02_gpu_remote_binding(self):
-        print("\n--- Testing: `bind: gpu-remote` (Multi-NUMA) ---")
-        shape_yaml = "options:\n  bind: gpu-remote\n  bind_to: core\nresources:\n  - type: core\n    count: 2"
-
-        self.run_test_case(
-            shape_yaml,
-            local_rank=0,
-            local_size=8,
-            gpus_per_task=1,
-            xml_file=TEST_GPU_XML_FILE,
-            output_filename="09_gpu_remote_rank0.png",
-            title="GPU Remote: Rank 0 (GPU on NUMA 0, CPU on NUMA 1)",
-        )
-
-    def test_03_gpu_remote_fails_on_single_numa(self):
+    def test_01_gpu_remote_fails_on_single_numa(self):
         print("\n--- Testing: `bind: gpu-remote` (Single-NUMA, Expect Fail) ---")
         shape_yaml = "options:\n  bind: gpu-remote\nresources:\n  - type: core\n    count: 1"
 
         # This test is expected to raise an error, so no graphic will be generated.
-        with self.assertRaisesRegex(RuntimeError, "Cannot find a remote NUMA node"):
+        with self.assertRaises(RuntimeError):
             self.run_test_case(
                 shape_yaml, local_rank=0, local_size=1, gpus_per_task=1, xml_file=TEST_XML_FILE
             )

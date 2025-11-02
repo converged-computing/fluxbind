@@ -37,15 +37,13 @@ class TopologyVisualizer:
         if not self.assigned_nodes:
             return nx.DiGraph()
 
-        # Step 1: Identify the type of resource we are drawing (e.g., 'core', 'pu').
         leaf_type = self.assigned_nodes[0][1].get("type")
         if not leaf_type:
             return nx.DiGraph()
 
-        # Step 2: Find a common parent container for the allocated resources.
         first_node_gp = self.assigned_nodes[0][0]
 
-        # Use the existing, correct helper function.
+        # We respect your capitalization fix here.
         parent = self.topology.get_ancestor_of_type(
             first_node_gp, "Package"
         ) or self.topology.get_ancestor_of_type(first_node_gp, "NUMANode")
@@ -56,7 +54,6 @@ class TopologyVisualizer:
         elif leaf_type in ["Package", "NUMANode", "Machine"]:
             search_domain_gp = first_node_gp
 
-        # Step 3: Get all sibling nodes of the same type within that context.
         if search_domain_gp:
             all_siblings = self.topology.get_descendants(search_domain_gp, type=leaf_type)
             if not all_siblings and leaf_type in ["Package", "NUMANode"]:
@@ -64,21 +61,12 @@ class TopologyVisualizer:
         else:
             all_siblings = self.assigned_nodes
 
-        # Step 4: Build the final set of nodes to draw.
         nodes_to_draw_gps = set()
         for gp, _ in all_siblings:
             nodes_to_draw_gps.add(gp)
             nodes_to_draw_gps.update(nx.ancestors(self.topology.hierarchy_view, gp))
 
         final_subgraph = self.topology.graph.subgraph(nodes_to_draw_gps).copy()
-
-        # Filter out types we don't want to see, for clarity.
-        nodes_to_remove = [
-            gp
-            for gp, data in final_subgraph.nodes(data=True)
-            if data.get("type") not in ["Core", "PU"]
-        ]
-        final_subgraph.remove_nodes_from(nodes_to_remove)
         return final_subgraph
 
     def draw(self, filename: str):

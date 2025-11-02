@@ -108,6 +108,10 @@ class HwlocTopology:
     def discover_devices(self):
         """
         Discover different kinds of GPU and NIC.
+
+        TODO: a better design would be to discover devices, then annotate the graph
+        nodes with device type. Then when we search for gpu or nic, we can just
+        search by that attribute. Right now we search for PCIDev, and then filter.
         """
         # Don't assume only one vendor of GPU.
         for vendor, command in {"NVIDIA": commands.nvidia_smi, "AMD": commands.rocm_smi}.items():
@@ -180,7 +184,7 @@ class HwlocTopology:
                             weight=matrix[i][j],  # The weight is the latency value from the matrix.
                         )
 
-        # --- First, try to parse the modern hwloc v2.x format ---
+        # First, try to parse newer hwloc v2.x format
         for dist_el in root.iter("distances2"):
             try:
                 # nbobjs is how many objects are in the matrix (e.g., 2 for 2 NUMA nodes).
@@ -274,15 +278,18 @@ class HwlocTopology:
         log.debug(f"Successfully found a slot with {len(final_allocation)} objects.")
         return final_allocation
 
-    def sort_by_affinity(self, candidates, affinity, allocated):
+    def sort_by_affinity(self, candidates, affinity, allocated, domain_gp):
+        """
+        Sort list of candidates by affinity so we get closest one.
+        """
         target_type = self.translate_type(affinity.get("type"))
         if not target_type:
             log.warning("Affinity spec missing 'type'.")
             return candidates
-        machine_gp = self.find_objects(type="Machine")[0][0]
-
-        # Affinity targets can be anywhere, so search from Machine
-        targets = self.get_available_children(machine_gp, target_type, allocated)
+        
+        # Search within the domain we were provided, not across the machine
+        log.debug(f"    -> Searching for affinity target '{target_type}' within the current domain.")
+        targets = self.get_available_children(domain_gp, target_type, allocated)        
         if not targets:
             log.warning(f"Affinity target '{target_type}' not found.")
             return candidates
@@ -330,12 +337,10 @@ class HwlocTopology:
         for gp, data in nodes:
             p_info = ""
             if data["type"] in ["Core", "PU"]:
-                # BUGFIX: Changed self.topology to self
                 package = self.get_ancestor_of_type(gp, "Package")
                 if package:
                     p_info = f"Package:{package[1].get('os_index')} -> "
                 if data["type"] == "PU":
-                    # BUGFIX: Changed self.topology to self
                     core = self.get_ancestor_of_type(gp, "Core")
                     if core:
                         p_info += f"Core:{core[1].get('os_index')} -> "
@@ -393,22 +398,7 @@ class HwlocTopology:
 
         parent_type = parent_node.get("type")
         child_type_lower = child_type.lower()
-
-        candidate_gp_set = set()
-        if child_type_lower == "gpu":
-            for gpu_info in self.gpus:
-                if (pci_id := gpu_info.get("pci_bus_id")) and (
-                    matches := self.find_objects(type="PCIDev", pci_busid=pci_id)
-                ):
-                    candidate_gp_set.add(matches[0][0])
-        elif child_type_lower == "nic":
-            for nic_gp, _ in self.nics:
-                candidate_gp_set.add(nic_gp)
-        else:
-            for gp, _ in self.find_objects(type=child_type):
-                candidate_gp_set.add(gp)
-
-        all_candidates = [(gp, self.graph.nodes[gp]) for gp in candidate_gp_set]
+        all_candidates = self.find_objects(type=child_type)
         log.debug(
             f"    -   -> Found {len(all_candidates)} total unique system-wide candidates for '{child_type}'."
         )
@@ -422,14 +412,14 @@ class HwlocTopology:
 
             # Rule 1: Relationship to NUMA node is through shared PACKAGE parent (for Cores) or LOCALITY (for Devices)
             if parent_type == "NUMANode":
-                if child_type_lower in ["gpu", "nic"]:
-                    if data.get("numa_os_index") == parent_node.get("os_index"):
-                        is_valid_child = True
-                elif child_type_lower in ["core", "pu"]:
+                if child_type_lower in ["core", "pu"]:
                     package_of_numa = self.get_ancestor_of_type(parent_gp, "Package")
                     if package_of_numa and nx.has_path(self.hierarchy_view, package_of_numa[0], gp):
                         is_valid_child = True
-
+                elif child_type_lower == "pcidev":
+                    if data.get("numa_os_index") == parent_node.get("os_index"):
+                        is_valid_child = True
+            
             # Rule 2 (NEW): Relationship of a Core/PU to a Device is through shared NUMA LOCALITY
             elif parent_type == "PCIDev" and child_type_lower in ["core", "pu"]:
                 parent_numa_idx = parent_node.get("numa_os_index")
@@ -449,8 +439,9 @@ class HwlocTopology:
         return available
 
     def find_objects(self, **attributes):
-        # STOPED HERE, trace this and see if gp is globally identifier, add comments.
-        # then go back to making distances/distances2 function and add comments.
+        """
+        Search nodes in the graph for a specific attribute (or more than one)
+        """
         return [
             (gp, data)
             for gp, data in self.graph.nodes(data=True)
@@ -468,9 +459,23 @@ class HwlocTopology:
         domain_info = f"{domain_node.get('type')}:{domain_node.get('os_index', domain_node.get('pci_busid', domain_gp))}"
         log.debug(f"{indent}[ENTER] find_assignment(req={request}, domain={domain_info})")
 
-        req_type, count = self.translate_type(request["type"]), request["count"]
+        # This can also be gpu/nic
+        raw_request_type = request['type']
+        req_type, count = self.translate_type(raw_request_type), request["count"]
 
+        # If the req_type is gpu or nic, this isn't an actual type in the graph - it is PCIDev.
         candidates = self.get_available_children(domain_gp, req_type, allocated)
+
+        # Now we handle the type of the pcidev request and filter candidates to those devices.
+        if raw_request_type.lower() == 'gpu':
+            gpu_bus_ids = {g['pci_bus_id'] for g in self.gpus}
+            candidates = [node for node in candidates if node[1].get('pci_busid') in gpu_bus_ids]
+            log.debug(f"{indent}  -> Filtered for 'gpu', {len(candidates)} candidates remain.")
+        elif raw_request_type.lower() == 'nic':
+            nic_bus_ids = {n[1]['pci_busid'] for n in self.nics}
+            candidates = [node for node in candidates if node[1].get('pci_busid') in nic_bus_ids]
+            log.debug(f"{indent}  -> Filtered for 'nic', {len(candidates)} candidates remain.")
+
         log.debug(f"{indent}  -> Found {len(candidates)} initial candidates for '{req_type}'.")
 
         affinity_spec = request.get("affinity")
@@ -496,7 +501,7 @@ class HwlocTopology:
                 self.last_affinity_target = (target_gp, domain_node)
             else:
                 log.debug(f"{indent}  -> Sorting candidates by GLOBAL affinity to {affinity_spec}")
-                candidates = self.sort_by_affinity(candidates, affinity_spec, allocated)
+                candidates = self.sort_by_affinity(candidates, affinity_spec, allocated, domain_gp)
 
         if len(candidates) < count:
             log.debug(
@@ -550,6 +555,9 @@ class HwlocTopology:
         return None
 
     def get_descendants(self, gp_index, **filters):
+        """
+        Given a global position index, return descendents that match a filter.
+        """
         if gp_index not in self.graph:
             return []
         desc = list(nx.descendants(self.hierarchy_view, gp_index))
@@ -648,6 +656,9 @@ class HwlocTopology:
         precompute_numa_affinities are done.
         """
         ordered_gpus = []
+
+        # The gpus we found were discovered with nvidia/rocm-smi and we need
+        # to map to things in the graph.
         for gpu_info in self.gpus:
             pci_id = gpu_info.get("pci_bus_id")
             if not pci_id:
@@ -655,7 +666,7 @@ class HwlocTopology:
 
             # Find the corresponding PCIDev object in our graph
             # Note: We now store and search for types in lowercase
-            matches = self.find_objects(type="pcidev", pci_busid=pci_id)
+            matches = self.find_objects(type="PCIDev", pci_busid=pci_id)
             if not matches:
                 log.warning(
                     f"Could not find a graph object for discovered GPU with PCI ID: {pci_id}"
@@ -682,3 +693,60 @@ class HwlocTopology:
         # Finally, create the attribute that the rest of the code expects.
         self.ordered_gpus = ordered_gpus
         log.info(f"Created an ordered list of {len(self.ordered_gpus)} GPUs for assignment.")
+
+
+    def find_bindable_leaves(self, total_allocation, bind_level):
+        """
+        Transforms a list of allocated resources into a final list of bindable
+        nodes by first choosing a strategy based on the allocation contents,
+        then executing that single, correct strategy.
+        """
+        leaf_nodes = []
+        log.debug(f"Transforming {len(total_allocation)} allocated objects to bind_level '{bind_level}'...")
+        
+        bind_type_concrete = self.translate_type(bind_level)
+
+        # Check for high-level structural containers. Their presence dictates the entire strategy.
+        high_level_containers = [node for node in total_allocation if node[1]['type'] in ['Package', 'NUMANode']]
+        
+        if high_level_containers:
+            # If we find a Package or NUMANode, we IGNORE all other items in the allocation
+            # and bind to the contents of this container ONLY. We have to do this because
+            # hwloc-calc can report that some CPU/PU are closer to the OTHER Numa node, or
+            # in other words, the physical layout of the xml != what hwloc-calc reports.
+            # So here we use get_ancestor_of_type to JUST use the hardware layout (which
+            # is more predictable).
+            container_gp, container_data = high_level_containers[0]
+            container_type = container_data.get("type")
+            log.debug(f"High-level container '{container_type}' found. Binding exclusively to its physical contents.")            
+            package_gp = container_gp if container_type == "Package" else self.get_ancestor_of_type(container_gp, "Package")[0]
+            if package_gp:
+                leaf_nodes = self.get_descendants(package_gp, type=bind_type_concrete)
+        else:
+            # No high-level containers - we can safely process each object individually.
+            # This is the logic that correctly handles the simple Core, PU, and device-affinity tests.
+            log.debug("No high-level containers found. Processing each allocated object individually.")
+            for gp, data in total_allocation:
+                
+                # Case 1: The object is already the type we want to bind to.
+                if data.get('type') == bind_type_concrete:
+                    leaf_nodes.append((gp, data))
+                    continue
+
+                # Case 2 (Container): Must be a low-level container (Core or PCIDev).
+                descendants = self.get_descendants(gp, type=bind_type_concrete)
+                if descendants:
+                    leaf_nodes.extend(descendants)
+                    continue
+
+                # Case 2c (Child): The object is a child of the target type (e.g., PU -> Core).
+                ancestor = self.get_ancestor_of_type(gp, bind_type_concrete)
+                if ancestor:
+                    leaf_nodes.append(ancestor)
+
+        # De-duplicate the final list and sort for deterministic assignment.
+        unique_nodes = list({gp: (gp, data) for gp, data in leaf_nodes}.values())
+        unique_nodes.sort(key=self.get_sort_key_for_node)
+        
+        log.debug(f"Transformation resulted in {len(unique_nodes)} unique bindable leaf nodes.")
+        return unique_nodes
