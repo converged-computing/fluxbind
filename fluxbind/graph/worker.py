@@ -18,7 +18,9 @@ def get_numa_affinity(gp_index, data):
     for a tool like this we need to trust predictibility.
     """
     hwloc_obj_str = ""
-    if data.get("type") in ["Core", "PU", "NUMANode"] and "os_index" in data:
+    if "cpuset" in data:
+        hwloc_obj_str = f"\"{data['cpuset']}\""
+    elif data.get("type") in ["Core", "PU", "NUMANode"] and "os_index" in data:
         hwloc_obj_str = f"{data['type'].lower()}:{data['os_index']}"
     elif data.get("pci_busid"):
         hwloc_obj_str = f"pci={data['pci_busid']}"
