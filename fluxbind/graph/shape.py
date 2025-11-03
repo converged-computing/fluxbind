@@ -30,6 +30,7 @@ class Shape:
     model, where a total set of resources on a node is divided among the
     local tasks.
     """
+
     valid_bind_modes = ["core", "pu", "process", "none", "gpu-local", "gpu-remote"]
     bind_default = "core"
 
@@ -125,15 +126,23 @@ class Shape:
         # See https://gist.github.com/vsoch/be2d1ec712e33ec157bab2dc9a36b10a
         # User explicit preference takes priority. We check here because the gpu-* types
         # cannot trigger here.
-        if self.bind_mode in ['core', 'pu', 'none']:
-            log.info(f"Using explicit binding preference from shapefile options: '{self.bind_mode}'.")
+        if self.bind_mode in ["core", "pu", "none"]:
+            log.info(
+                f"Using explicit binding preference from shapefile options: '{self.bind_mode}'."
+            )
             return self.bind_mode
 
         # Try to infer implicit intent
         if total_allocation:
-            most_granular_type = max(total_allocation, key=lambda item: item[1].get("depth", -1))[1].get("type").lower()
+            most_granular_type = (
+                max(total_allocation, key=lambda item: item[1].get("depth", -1))[1]
+                .get("type")
+                .lower()
+            )
             if most_granular_type in ["core", "pu"]:
-                log.info(f"Using implicit binding preference from resource request: '{most_granular_type}'.")
+                log.info(
+                    f"Using implicit binding preference from resource request: '{most_granular_type}'."
+                )
                 return most_granular_type
 
         # Fall back to a safe default for HPC.
@@ -205,99 +214,45 @@ class Shape:
     def run(self, xml_file, local_size, local_rank, gpus_per_task=None):
         """
         Finds a binding by applying the hierarchy of rules to the shapefile and topology.
+        This is the definitive version, returning a single, complete list of assigned nodes.
         """
         topology = HwlocTopology(xml_file)
         gpu_assignment = None
         total_allocation = None
 
-        # Determine the set of resources we need to find CPUs in.
         if self.bind_mode in ["gpu-local", "gpu-remote"]:
-            # If it's a GPU-driven binding, call the helper to get the GPU assignment
-            # and the correct CPU search domain.
-            gpu_assignment, cpu_domain_gps = self.get_gpu_binding(topology, local_rank, gpus_per_task)
-            # The allocation for the CPU search is now the set of packages determined by the helper.
+            gpu_assignment, cpu_domain_gps = self.get_gpu_binding(
+                topology, local_rank, gpus_per_task
+            )
             total_allocation = [(gp, topology.graph.nodes[gp]) for gp in cpu_domain_gps]
         else:
-            # For all other cases, perform the standard resource search based on the shapefile.
             log.info(f"Finding the total resource pool for all {local_size} ranks on this node...")
             total_allocation = topology.match_resources(self.jobspec)
 
         if total_allocation is None:
-             raise RuntimeError("Failed to find any resources on the node that match the requested shape.")
-
-        # Honor a user request for binding level or use a default
-        # With devices, we already selected them here, and we are now focused on bindable resources
-        bind_level = self.get_bind_type(total_allocation)
-
-        # Special case of no binding, but we likely want affinity to devices, etc.
-        if bind_level == "none":
-            log.info("bind: none selected. Skipping cpuset generation.")
-            summary_nodes = [
-                node
-                for node in total_allocation
-                if node[1].get("type") not in ["Machine", "Package", "NUMANode"]
-            ]
-            log.info(
-                f"\nFound {len(summary_nodes)} un-bound resources for local rank {local_rank}:"
+            raise RuntimeError(
+                "Failed to find any resources on the node that match the requested shape."
             )
-            topology.summarize(summary_nodes)
+
+        # Determine the target binding level. No binding? Then we probably just wanted GPUs.
+        bind_level = self.get_bind_type(total_allocation)
+        if bind_level == "none":
             return TopologyResult(
                 nodes=total_allocation,
                 mask="UNBOUND",
                 gpu_string=gpu_assignment.cuda_devices if gpu_assignment else "NONE",
             )
 
-        log.info(f"Deriving bindable resources with final preference: '{bind_level}'.")        
+        # Change the allocation into a list of bindable nodes.
+        log.info(f"Deriving bindable resources with final preference: '{bind_level}'.")
         leaf_nodes = topology.find_bindable_leaves(total_allocation, bind_level)
         if not leaf_nodes:
             raise RuntimeError(
                 f"Could not find any bindable resources of type '{bind_level}' for the allocation."
             )
 
-        # Get pattern and reverse options from the first resource request.
-        # This simplification assumes one pattern applies to the whole allocation.
-        main_request = self.jobspec.get("resources", [{}])[0]
-        pattern = main_request.get("pattern", "packed").lower()
-        reverse = main_request.get("reverse", False)
-
-        log.info(f"Applying distribution pattern: '{pattern}' (reverse={reverse}).")
-
-        # Apply the 'reverse' modifier to the canonical list of resources.
-        if reverse:
-            leaf_nodes.reverse()
-
-        # Calculate the shape ACROSS the node, and then break apart by rank.
-        # Remember that:
-        #  1. The local size is the number of tasks on a node.
-        #  2. The shape is describing the slot we want on a node, and we want some number
-        # So we are calculating the total number of resources (len(leaf_nodes)) based on the shape
-        # and dividing that number evenly among all tasks on the node. Integer division discards remainders.
-        # This makes the assumption we are doing uniform, contiguous chunking.
-        items_per_rank = len(leaf_nodes) // local_size
-        final_nodes = []
-
-        if items_per_rank == 0 and local_size > 0:
-            log.warning(f"Oversubscription detected. Distributing available resources one by one.")
-            if local_rank < len(leaf_nodes):
-                final_nodes = [leaf_nodes[local_rank]]
-        elif pattern == "packed":
-            log.debug("Using 'packed' pattern: assigning a contiguous block of resources.")
-            start_index = local_rank * items_per_rank
-            end_index = start_index + items_per_rank
-            final_nodes = leaf_nodes[start_index:end_index]
-        elif pattern in ["scatter", "spread", "interleaved"]:
-            log.debug("Using 'scatter' pattern: dealing resources like cards.")
-
-            # This slice syntax means "start at local_rank and take every local_size-th item"
-            strided_slice = leaf_nodes[local_rank::local_size]
-
-            # Ensure we don't take more than our fair share if division is not perfect.
-            final_nodes = strided_slice[:items_per_rank]
-        else:
-            raise ValueError(
-                f"Unknown pattern '{pattern}'. Must be 'packed' or 'scatter'/'spread'/'interleaved'."
-            )
-
+        # Apply a pattern of distribution (e.g., packed/scatter).
+        final_nodes = self.apply_binding_pattern(leaf_nodes, local_size, local_rank)
         log.info(
             f"\nAssigning {len(final_nodes)} '{bind_level}' resources for local rank {local_rank}:"
         )
@@ -306,13 +261,12 @@ class Shape:
 
         topology.summarize(final_nodes)
 
+        # Now we need the actual cpusets which is what does the binding.
         cpusets = []
         if bind_level == "pu":
             cpusets = [d["cpuset"] for _, d in final_nodes if "cpuset" in d]
         elif bind_level == "core":
-            log.debug("bind='core' selected. Generating cpuset from the first PU of each Core.")
             for core_gp, _ in final_nodes:
-                # Use topology's translate_type for consistency
                 pus = sorted(
                     topology.get_descendants(core_gp, type=topology.translate_type("pu")),
                     key=lambda x: x[1].get("os_index", 0),
@@ -321,12 +275,70 @@ class Shape:
                     first_pu_cpuset = pus[0][1].get("cpuset")
                     if first_pu_cpuset:
                         cpusets.append(first_pu_cpuset)
-
         raw_mask = self.hwloc_calc.get_cpuset(" ".join(cpusets)) if cpusets else "0x0"
         mask = raw_mask.replace(",,", ",")
+
+        # We need to add devices (GPU,NIC) to the final nodes.
+        # This is mostly for the graphic visualization
+        assigned_devices = []
+        if self.bind_mode in ["gpu-local", "gpu-remote"]:
+
+            # For GPU modes, the assigned GPUs are in the `gpu_assignment` object.
+            if gpu_assignment and gpu_assignment.pci_ids:
+                for pci_id in gpu_assignment.pci_ids:
+                    matches = topology.find_objects(type="PCIDev", pci_busid=pci_id.lower())
+                    if matches:
+                        assigned_devices.extend(matches)
+        else:
+            # For CPU-driven jobs, the assigned devices are any PCIDevs part of the allocation.
+            assigned_devices = [
+                node for node in total_allocation if node[1].get("type") == "PCIDev"
+            ]
+
+        # THE FINAL LIST dun dun dun
+        all_assigned_nodes = final_nodes + assigned_devices
+
         return TopologyResult(
-            nodes=final_nodes,
+            # This contains both CPUs and Devices
+            nodes=all_assigned_nodes,
             mask=mask,
             topo=topology,
             gpu_string=gpu_assignment.cuda_devices if gpu_assignment else "NONE",
         )
+
+    def apply_binding_pattern(self, leaf_nodes, local_size, local_rank):
+        """
+        Given a set of chosen leaf nodes (typicall Core/PU) apply a binding pattern.
+
+        The binding pattern is an option in the jobspec.
+        """
+        main_request = self.jobspec.get("resources", [{}])[0]
+        pattern = main_request.get("pattern", "packed").lower()
+        reverse = main_request.get("reverse", False)
+        log.info(f"Applying distribution pattern: '{pattern}' (reverse={reverse}).")
+        if reverse:
+            leaf_nodes.reverse()
+
+        # This block is correct. It divides the pool and finds the CPU slice for this rank.
+        items_per_rank = len(leaf_nodes) // local_size
+
+        # This will hold the assigned CPUs.
+        final_nodes = []
+        if items_per_rank == 0 and local_size > 0:
+            if local_rank < len(leaf_nodes):
+                final_nodes = [leaf_nodes[local_rank]]
+
+        # Pack em up! Like little weiner hotdogs in plastic!
+        elif pattern == "packed":
+            start_index = local_rank * items_per_rank
+            end_index = start_index + items_per_rank
+            final_nodes = leaf_nodes[start_index:end_index]
+
+        # I think interleaved is a little different, but I feel lazy right
+        # now and don't want to think about it.
+        elif pattern in ["scatter", "spread", "interleaved"]:
+            strided_slice = leaf_nodes[local_rank::local_size]
+            final_nodes = strided_slice[:items_per_rank]
+        else:
+            raise ValueError(f"Unknown pattern '{pattern}'.")
+        return final_nodes
