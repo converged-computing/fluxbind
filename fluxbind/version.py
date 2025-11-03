@@ -14,6 +14,7 @@ LICENSE = "LICENSE"
 # Note that the spack / environment modules plugins are installed automatically.
 # This doesn't need to be the case.
 INSTALL_REQUIRES = (
+    ("networkx", {"min_version": None}),
     ("jsonschema", {"min_version": None}),
     ("Jinja2", {"min_version": None}),
     # Yeah, probably overkill, just being used for printing the scripts
