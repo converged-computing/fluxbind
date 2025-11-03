@@ -15,118 +15,84 @@ log = logging.getLogger(__name__)
 
 class TopologyVisualizer:
     """
-    Creates a simplified, contextual block diagram of a hardware allocation
-    that shows assigned nodes in the context of their unassigned siblings.
+    Creates a visual representation of a hardware allocation on a topology graph.
+    This version draws the ENTIRE hardware topology as a stable background.
     """
 
-    def __init__(self, topology: "HwlocTopology", assigned_nodes: list, affinity_target=None):
+    def __init__(self, topology, assigned_nodes: list, affinity_target=None):
         if not VISUALIZATION_ENABLED:
             raise ImportError("Visualization libraries (matplotlib, pydot) are not installed.")
 
         self.topology = topology
-        self.assigned_nodes = assigned_nodes
         self.assigned_gps = {gp for gp, _ in assigned_nodes}
         self.affinity_target_gp = affinity_target[0] if affinity_target else None
-        self.title = "Hardware Allocation"  # Public attribute for a descriptive title
+        self.title = "Hardware Allocation"
 
-    def _build_contextual_subgraph(self):
+    def draw(self, filename, width=12, height=8):
         """
-        Constructs a new, clean graph for drawing that includes assigned nodes,
-        their unassigned siblings, and their parent containers for context.
+        Generates and saves the allocation graph to a file, drawing the
+        entire topology and highlighting the assigned resources.
         """
-        if not self.assigned_nodes:
-            return nx.DiGraph()
-
-        leaf_type = self.assigned_nodes[0][1].get("type")
-        if not leaf_type:
-            return nx.DiGraph()
-
-        first_node_gp = self.assigned_nodes[0][0]
-
-        # We respect your capitalization fix here.
-        parent = self.topology.get_ancestor_of_type(
-            first_node_gp, "Package"
-        ) or self.topology.get_ancestor_of_type(first_node_gp, "NUMANode")
-
-        search_domain_gp = None
-        if parent:
-            search_domain_gp = parent[0]
-        elif leaf_type in ["Package", "NUMANode", "Machine"]:
-            search_domain_gp = first_node_gp
-
-        if search_domain_gp:
-            all_siblings = self.topology.get_descendants(search_domain_gp, type=leaf_type)
-            if not all_siblings and leaf_type in ["Package", "NUMANode"]:
-                all_siblings = self.assigned_nodes
-        else:
-            all_siblings = self.assigned_nodes
-
-        nodes_to_draw_gps = set()
-        for gp, _ in all_siblings:
-            nodes_to_draw_gps.add(gp)
-            nodes_to_draw_gps.update(nx.ancestors(self.topology.hierarchy_view, gp))
-
-        final_subgraph = self.topology.graph.subgraph(nodes_to_draw_gps).copy()
-        return final_subgraph
-
-    def draw(self, filename: str):
-        # This method's logic was already correct and does not need to change.
         log.info(f"Generating allocation graphic at '{filename}'...")
 
-        subgraph = self._build_contextual_subgraph()
-        if subgraph.number_of_nodes() == 0:
-            log.warning("Cannot generate graphic: No nodes to draw.")
-            return
+        # 1. Start with the complete hierarchy view as the base.
+        subgraph = self.topology.hierarchy_view
 
-        labels = {}
-        colors = {}
-        sorted_nodes = sorted(
-            subgraph.nodes(data=True),
-            key=lambda item: (item[1].get("depth", 0), self.topology.get_sort_key_for_node(item)),
-        )
+        # 2. Create a clean copy of the graph to avoid modifying the original.
+        clean_subgraph = subgraph.copy()
 
-        for gp, data in sorted_nodes:
-            node_type = data.get("type", "Unknown")
-            os_index = data.get("os_index")
-            labels[gp] = (
-                f"{node_type.capitalize()}:{os_index}"
-                if os_index is not None
-                else node_type.capitalize()
-            )
-            # Color logic is unchanged...
-            if gp == self.affinity_target_gp:
-                colors[gp] = "gold"
-            elif gp in self.assigned_gps:
-                colors[gp] = "lightgreen"
-            elif node_type == "numanode":
-                colors[gp] = "skyblue"
-            elif node_type == "package":
-                colors[gp] = "coral"
+        # 3. Iterate through all nodes in the copy and remove the conflicting 'name' attribute.
+        #    This is a known issue when interfacing networkx with pydot.
+        for _, data in clean_subgraph.nodes(data=True):
+            if "name" in data:
+                del data["name"]
+
+        # All subsequent drawing operations will use this sanitized graph copy.
+        subgraph = clean_subgraph
+
+        # Make it pink! Err, green and blue and gray... :)
+        labels, colors = {}, {}
+        for g, d in subgraph.nodes(data=True):
+            labels[g] = f"{d.get('type')}"
+            if "os_index" in d:
+                labels[g] += f":{d['os_index']}"
+            elif "pci_busid" in d:
+                labels[g] += f"\n{d.get('pci_busid', '')[:10]}"
+
+            if g == self.affinity_target_gp:
+                colors[g] = "gold"
+            elif g in self.assigned_gps:
+                node_type_key = d.get("device_type") or d.get("type")
+                color_map = {
+                    "gpu": "orange",
+                    "nic": "violet",
+                    "Core": "lightgreen",
+                    "PU": "lightgreen",
+                }
+                colors[g] = color_map.get(node_type_key, "lightgreen")
+            elif d["type"] == "NUMANode":
+                colors[g] = "skyblue"
             else:
-                colors[gp] = "lightgray"
+                colors[g] = "lightgray"
 
-        node_colors = [colors.get(gp, "lightgray") for gp in subgraph.nodes()]
-        pos = nx.drawing.nx_pydot.graphviz_layout(subgraph, prog="dot")
+        node_colors = [colors.get(node, "lightgray") for node in subgraph.nodes()]
+        edge_colors = ["black" for _, _, d in subgraph.edges(data=True)]
 
-        plt.figure(figsize=(12, 8))
-        nx.draw_networkx(
-            subgraph,
-            pos,
-            labels=labels,
-            node_color=node_colors,
-            node_size=2000,
-            node_shape="s",
-            edgecolors="black",
-            font_size=8,
-            font_weight="bold",
-            arrows=False,
-            width=1.5,
+        try:
+            pos = nx.drawing.nx_pydot.graphviz_layout(subgraph, prog="dot")
+        except Exception as e:
+            log.warning(f"graphviz_layout failed: {e}. Falling back to a simpler layout.")
+            pos = nx.spring_layout(subgraph, seed=42)
+
+        plt.figure(figsize=(width, height))
+        nx.draw_networkx_nodes(
+            subgraph, pos, node_color=node_colors, node_size=1500, edgecolors="black"
         )
+        nx.draw_networkx_edges(subgraph, pos, edge_color=edge_colors, arrows=False, width=1.0)
+        nx.draw_networkx_labels(subgraph, pos, labels=labels, font_size=8)
 
-        plt.title(self.title, fontsize=16)
+        plt.title(self.title, fontsize=20)
         plt.box(False)
-        plt.tight_layout()
-        plt.savefig(filename, bbox_inches="tight", dpi=150)
+        plt.savefig(filename, bbox_inches="tight")
         plt.close()
-
         log.info("...graphic saved successfully.")
