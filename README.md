@@ -44,7 +44,6 @@ flux start --config ./examples/config/match-first.toml
 flux alloc --conf ./examples/config/match-first.toml
 
 # 1. Bind each task to a unique physical core, starting from core:0 (common case)
-# STOPPED HERE - get this working with run! I don't think --graph is being passed.
 fluxbind run -n 8 --quiet --shape ./examples/shape-graph/single-node/simple_cores/shape.yaml --graph sleep 1
 
 # 2. Reverse it!

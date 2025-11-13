@@ -265,6 +265,7 @@ class Shape:
         cpusets = []
         if bind_level == "pu":
             cpusets = [d["cpuset"] for _, d in final_nodes if "cpuset" in d]
+
         elif bind_level == "core":
             for core_gp, _ in final_nodes:
                 pus = sorted(
@@ -272,9 +273,12 @@ class Shape:
                     key=lambda x: x[1].get("os_index", 0),
                 )
                 if pus:
-                    first_pu_cpuset = pus[0][1].get("cpuset")
-                    if first_pu_cpuset:
-                        cpusets.append(first_pu_cpuset)
+                    # Iterate through ALL PUs within the core
+                    for _pu_gp, pu_data in pus:
+                        pu_cpuset = pu_data.get("cpuset")
+                        if pu_cpuset:
+                            cpusets.append(pu_cpuset)
+
         raw_mask = self.hwloc_calc.get_cpuset(" ".join(cpusets)) if cpusets else "0x0"
         mask = raw_mask.replace(",,", ",")
 
