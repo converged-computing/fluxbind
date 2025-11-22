@@ -93,7 +93,9 @@ class NodeResourceManager:
         return all_gps
 
     def _create_binding_string(
-        self, total_allocation: List[Tuple[int, Dict]], bind_level: str = "core"
+        self,
+        total_allocation: List[Tuple[int, Dict]],
+        bind_level: str = "core",
     ) -> str:
         """
         Transforms a list of allocated resources into a final cpuset and GPU string.
@@ -134,7 +136,9 @@ class NodeResourceManager:
         """Looks up a set of GPs in the graph to reconstruct an allocation list."""
         return [(gp, self._topology.graph.nodes[gp]) for gp in gps if gp in self._topology.graph]
 
-    def create_reservation(self, reservation_id: str, jobspec: Dict) -> Optional[str]:
+    def create_reservation(
+        self, reservation_id: str, jobspec: Dict, return_cpulist=False
+    ) -> Optional[str]:
         """
         Finds and reserves resources for a given ID, returning a binding string.
 
