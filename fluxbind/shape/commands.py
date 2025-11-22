@@ -1,6 +1,5 @@
 import json
 import subprocess
-import sys
 
 
 class Command:
@@ -23,6 +22,13 @@ class Command:
         except FileNotFoundError as e:
             cmd_str = command[0] if isinstance(command, list) else command.split()[0]
             raise RuntimeError(f"Command not found: '{cmd_str}'") from e
+
+
+class LstopoCommand(Command):
+    name = "lstopo"
+
+    def get_xml(self):
+        return self.run(f"{self.name} -p --output-format xml", shell=True)
 
 
 class HwlocCalcCommand(Command):
@@ -164,3 +170,4 @@ class RocmSmiCommand(Command):
 hwloc_calc = HwlocCalcCommand()
 nvidia_smi = NvidiaSmiCommand()
 rocm_smi = RocmSmiCommand()
+lstopo = LstopoCommand()

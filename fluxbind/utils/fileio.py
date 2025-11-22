@@ -5,6 +5,7 @@ import re
 import stat
 import subprocess
 import tempfile
+import xml.etree.ElementTree as ET
 from contextlib import contextmanager
 
 import yaml
@@ -15,6 +16,22 @@ def get_local_cluster():
     Guess the local cluster based on the hostname
     """
     return platform.node().split("-")[0]
+
+
+def read_xml(xml_input):
+    """
+    Read an xml file or string
+    """
+    try:
+        if os.path.exists(xml_input):
+            with open(xml_input, "r") as f:
+                xml_content = f.read()
+            root = ET.fromstring(xml_content)
+        else:
+            root = ET.fromstring(xml_input)
+    except ET.ParseError as e:
+        raise ValueError(f"Failed to parse XML: {e}")
+    return root
 
 
 def read_json(filename):
